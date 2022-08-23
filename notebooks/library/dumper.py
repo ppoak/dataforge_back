@@ -1,10 +1,11 @@
 import re
+import abc
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
 
-class FileDumper:
+class FileDumperBase(abc.ABC):
     SEP = '\t'
     SUFFIX = 'bin'
     IDXPRESENT = 'index'
@@ -19,7 +20,7 @@ class FileDumper:
 
     def __init__(
         self,
-        file_path: 'str | list',
+        file_path: str,
         file_type: str,
         date_field: str,
         inst_field: str,
@@ -38,12 +39,12 @@ class FileDumper:
             name_pattern,
         )
 
-        if inst_field == FileDumper.IDXPRESENT and date_field == FileDumper.IDXPRESENT:
+        if inst_field == FileDumperBase.IDXPRESENT and date_field == FileDumperBase.IDXPRESENT:
             if not isinstance(data.index.levels[1], pd.DatetimeIndex):
                 data = data.swaplevel()
-        elif inst_field == FileDumper.IDXPRESENT and date_field != FileDumper.IDXPRESENT:
+        elif inst_field == FileDumperBase.IDXPRESENT and date_field != FileDumperBase.IDXPRESENT:
             data.index = pd.MultiIndex.from_arrays([data.index, data[date_field]])
-        elif inst_field != FileDumper.IDXPRESENT and date_field == FileDumper.IDXPRESENT:
+        elif inst_field != FileDumperBase.IDXPRESENT and date_field == FileDumperBase.IDXPRESENT:
             data.index = pd.MultiIndex.from_arrays([data[inst_field], data.index])
         else:
             data = data.set_index([inst_field, date_field])
@@ -51,14 +52,16 @@ class FileDumper:
 
         self.freq = freq
         self.dump_mode = dump_mode
+        self.inst_field = inst_field
+        self.date_field = date_field
         self.instruments = data.index.levels[0].sort_values().to_list()
         self.calendar = data.index.levels[1].sort_values().to_list()
 
         self.dump_path = Path(dump_path)
         self.dump_path.mkdir(parents=True, exist_ok=True)
-        self.instrument_path = Path(self.dump_path).joinpath(FileDumper.INSTPATH)
-        self.calendar_path = Path(self.dump_path).joinpath(FileDumper.CALPATH)
-        self.feature_path = Path(self.dump_path).joinpath(FileDumper.FEATPATH)
+        self.instrument_path = Path(self.dump_path).joinpath(FileDumperBase.INSTPATH)
+        self.calendar_path = Path(self.dump_path).joinpath(FileDumperBase.CALPATH)
+        self.feature_path = Path(self.dump_path).joinpath(FileDumperBase.FEATPATH)
         self.instrument_path.mkdir(parents=True, exist_ok=True)
         self.calendar_path.mkdir(parents=True, exist_ok=True)
         self.feature_path.mkdir(parents=True, exist_ok=True)
@@ -68,7 +71,7 @@ class FileDumper:
                 header=None, parse_dates=[0]).iloc[:, 0].to_list()
             self.old_instruments = pd.read_csv(self.instrument_path.joinpath("all.txt"), 
                 header=None, sep='\t', index_col=0, parse_dates=[1, 2])
-            self.old_instruments.columns = [FileDumper.INSTSTARTNAME, FileDumper.INSTENDNAME]
+            self.old_instruments.columns = [FileDumperBase.INSTSTARTNAME, FileDumperBase.INSTENDNAME]
     
     def _load_data(
         self, 
@@ -79,38 +82,58 @@ class FileDumper:
         date_field: str,
         name_pattern: str,
     ):
+        file_path = Path(file_path)
         data_reader = eval(f'pd.read_{file_type}')
-        if isinstance(file_path, str):
+        if file_path.is_file():
             data = data_reader(file_path, columns=dump_field)
-        elif isinstance(file_path, (list, tuple)):
+        elif file_path.is_dir():
             datas = []
-            for fp in file_path:
+            for fp in file_path.iterdir():
                 data = data_reader(fp, columns=dump_field)
                 if name_pattern is not None:
-                    name = re.findall(name_pattern, Path(file_path).stem)[0]
+                    name = re.findall(name_pattern, fp.stem)[0]
                     data[inst_field or date_field] = name if inst_field else pd.to_datetime(name)
                 datas.append(data)
             data = pd.concat(datas, axis=0)
         return data
     
+    @abc.abstractclassmethod
+    def dump_inst(self):
+        raise NotImplementedError("Subclass of FileDumperBase must implement dump_* method")
+
+    @abc.abstractclassmethod
+    def dump_cal(self):
+        raise NotImplementedError("Subclass of FileDumperBase must implement dump_* method")
+    
+    @abc.abstractclassmethod
+    def dump_feat(self):
+        raise NotImplementedError("Subclass of FileDumperBase must implement dump_* method")
+        
+    @abc.abstractclassmethod
+    def dump(self):
+        raise NotImplementedError("Subclass of FileDumperBase must implement dump_* method")
+
+
+class FileDumper(FileDumperBase):
+
     def dump_inst(self):
         start_date = self.data.groupby(level=0).apply(lambda x: x.index.get_level_values(1).min())
         end_date = self.data.groupby(level=0).apply(lambda x: x.index.get_level_values(1).max())
         instruments = pd.concat([start_date, end_date], axis=1)
-        instruments.columns = [FileDumper.INSTSTARTNAME, FileDumper.INSTENDNAME]
-        common_idx = instruments.index.intersection(self.old_instruments.index)
-        new_idx = instruments.index.difference(self.old_instruments.index)
-        new_instruments = pd.concat([self.old_instruments, instruments.loc[new_idx]], axis=0)
 
         if self.dump_mode == "update":
-            new_instruments[FileDumper.INSTENDNAME].mask(
-                new_instruments.loc[common_idx, FileDumper.INSTENDNAME] < 
-                instruments.loc[common_idx, FileDumper.INSTENDNAME],
-                instruments[FileDumper.INSTENDNAME], inplace=True,
+            instruments.columns = [FileDumperBase.INSTSTARTNAME, FileDumperBase.INSTENDNAME]
+            common_idx = instruments.index.intersection(self.old_instruments.index)
+            new_idx = instruments.index.difference(self.old_instruments.index)
+            instruments = pd.concat([self.old_instruments, instruments.loc[new_idx]], axis=0)
+            instruments[FileDumperBase.INSTENDNAME].mask(
+                instruments.loc[common_idx, FileDumperBase.INSTENDNAME] < 
+                instruments.loc[common_idx, FileDumperBase.INSTENDNAME],
+                instruments[FileDumperBase.INSTENDNAME], inplace=True,
             )
 
-        new_instruments.to_csv(self.instrument_path.joinpath(
-            f'{FileDumper.ALLINSTNAME}.txt'), header=False, sep=FileDumper.SEP, index=True)
+        instruments.to_csv(self.instrument_path.joinpath(
+            f'{FileDumperBase.ALLINSTNAME}.txt'), header=False, sep=FileDumperBase.SEP, index=True)
     
     def dump_cal(self):
         self.calendar = (
@@ -119,7 +142,7 @@ class FileDumper:
         )
         pd.Series(
             self.calendar,
-        ).map(lambda x: x.strftime(FileDumper.TIMEFMT if self.freq == "day" else FileDumper.HFREQTIMEFMT)
+        ).map(lambda x: x.strftime(FileDumperBase.TIMEFMT if self.freq == "day" else FileDumperBase.HFREQTIMEFMT)
         ).to_csv(
             self.calendar_path.joinpath(f'{self.freq}.txt'), 
             index=False, 
@@ -127,8 +150,11 @@ class FileDumper:
         )
     
     def dump_feat(self):
-        update_calendar = sorted(list(set(self.calendar) - set(self.old_calendar)))
-        update_data = self.data.loc(axis=0)[:, update_calendar]
+        if self.dump_mode == "update":
+            update_calendar = sorted(list(set(self.calendar) - set(self.old_calendar)))
+            update_data = self.data.loc(axis=0)[:, update_calendar]
+        else:
+            update_data = self.data
 
         def _ensure_path(code):
             code_path = self.feature_path.joinpath(code.lower())
@@ -140,35 +166,61 @@ class FileDumper:
             for feat in self.data.columns:
                 np.hstack([self.calendar.index(data.index.get_level_values(1)[0]), 
                     data[feat].values]).astype('float32').tofile(
-                        code_path.joinpath(f'{feat}.{FileDumper.FREQ}.{FileDumper.SUFFIX}'))
+                        code_path.joinpath(f'{feat}.{self.freq}.{FileDumperBase.SUFFIX}'))
         
         def _update(data):
             code_path = _ensure_path(data.index.get_level_values(0)[0])
             for feat in self.data.columns:
-                with open(code_path.joinpath(f'{feat}.{self.freq}.{FileDumper.SUFFIX}'), 'ab') as f: 
+                with open(code_path.joinpath(f'{feat}.{self.freq}.{FileDumperBase.SUFFIX}'), 'ab') as f: 
                     data.loc[:, feat].values.astype('float32').tofile(f)
 
         if update_data.empty:
             print('Your data is up-to-date!')
             return
         update_data.groupby(level=0).apply(_overwrite if self.dump_mode != "update" else _update)
-        
+
     def dump(self):
         self.dump_inst()
         self.dump_cal()
         self.dump_feat()
 
 
+class IndexCompDumper(FileDumperBase):
+    def dump_inst(self):
+        def _save(data):
+            entry_date = data.groupby(level=0).apply(lambda x: x.index.get_level_values(1).min())
+            exit_date = data.groupby(level=0).apply(lambda x: x.index.get_level_values(1).max())
+            instruments = pd.concat([entry_date, exit_date], axis=1)
+            instruments.applymap(lambda x: x.strftime(FileDumperBase.TIMEFMT)
+                ).to_csv(
+                    str(self.instrument_path.joinpath(
+                        data[self.inst_field or self.date_field].iloc[0].lower() + '.txt'
+                    ).resolve()),
+                    sep = FileDumperBase.SEP, header = False,
+                )
+        self.data.groupby(self.inst_field or self.date_field).apply(_save)
+
+
+    def dump_cal(self):
+        pass
+
+    def dump_feat(self):
+        pass
+
+    def dump(self):
+        self.dump_inst()
+    
+
 if __name__ == "__main__":
-    dumper = FileDumper(
-        file_path = "data/kline-daily/kline-daily-20220805-20220819.parquet",
+    dumper = IndexCompDumper(
+        file_path = "data/index-weights/each-index",
         file_type = "parquet",
         date_field = "index",
         inst_field = "index",
         dump_field = None,
         dump_path = "./data/qlib-day",
-        dump_mode = "update",
-        name_pattern = None,
+        dump_mode = "overwrite",
+        name_pattern = '.*',
         freq = "day",
     )
     dumper.dump()
