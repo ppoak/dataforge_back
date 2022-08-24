@@ -264,7 +264,7 @@ class IndexCompDumper(FileDumper):
             instruments.applymap(lambda x: x.strftime(FileDumperBase.TIMEFMT)
                 ).to_csv(
                     str(self.instrument_path.joinpath(
-          
+                        data[self.index_field].iloc[0].lower() + '.txt'
                     ).resolve()),
                     sep = FileDumperBase.SEP, header = False,
                 )
