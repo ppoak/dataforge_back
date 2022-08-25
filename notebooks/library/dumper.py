@@ -138,9 +138,9 @@ class FileDumper(FileDumperBase):
         return self
     
     def _dump_cal(self):
-        self.calendar = (
+        self.calendar = pd.DatetimeIndex(
             self.calendar if self.dump_mode != "a" else 
-            sorted(list(set(self.calendar) | set(self.old_calendar)))
+            sorted(list(set(self.calendar[self.calendar > self.old_calendar.min()]) | set(self.old_calendar)))
         )
         pd.Series(
             self.calendar,
@@ -155,30 +155,38 @@ class FileDumper(FileDumperBase):
     def _dump_inst(self):
         start_date = self.data.groupby(level=1).apply(lambda x: x.index.get_level_values(0).min())
         end_date = self.data.groupby(level=1).apply(lambda x: x.index.get_level_values(0).max())
-        instruments = pd.concat([start_date, end_date], axis=1)
+        self.instruments = pd.concat([start_date, end_date], axis=1)
 
         if self.dump_mode == "a":
-            instruments.columns = [FileDumperBase.INSTSTARTNAME, FileDumperBase.INSTENDNAME]
-            common_idx = instruments.index.intersection(self.old_instruments.index)
-            new_idx = instruments.index.difference(self.old_instruments.index)
-            instruments = pd.concat([self.old_instruments, instruments.loc[new_idx]], axis=0)
-            instruments[FileDumperBase.INSTENDNAME].mask(
-                instruments.loc[common_idx, FileDumperBase.INSTENDNAME] < 
-                instruments.loc[common_idx, FileDumperBase.INSTENDNAME],
-                instruments[FileDumperBase.INSTENDNAME], inplace=True,
+            self.instruments.columns = [FileDumperBase.INSTSTARTNAME, FileDumperBase.INSTENDNAME]
+            common_idx = self.instruments.index.intersection(self.old_instruments.index)
+            new_idx = self.instruments.index.difference(self.old_instruments.index)
+            self.instruments = pd.concat([self.old_instruments, self.instruments.loc[new_idx]], axis=0)
+            self.instruments[FileDumperBase.INSTSTARTNAME].mask(
+                self.instruments.loc[common_idx, FileDumperBase.INSTSTARTNAME] <
+                self.old_instruments.loc[common_idx, FileDumperBase.INSTSTARTNAME],
+                self.old_instruments[FileDumperBase.INSTSTARTNAME], inplace=True,
+            )
+            self.instruments[FileDumperBase.INSTENDNAME].mask(
+                self.instruments.loc[common_idx, FileDumperBase.INSTENDNAME] < 
+                self.old_instruments.loc[common_idx, FileDumperBase.INSTENDNAME],
+                self.old_instruments[FileDumperBase.INSTENDNAME], inplace=True,
             )
 
-        instruments.to_csv(self.instrument_path.joinpath(
-            f'{FileDumperBase.ALLINSTNAME}.txt'), header=False, sep=FileDumperBase.SEP, index=True)
+        self.instruments.to_csv(str(self.instrument_path.joinpath(
+            f'{FileDumperBase.ALLINSTNAME}.txt').resolve()), header=False, sep=FileDumperBase.SEP, index=True)
         
         return self
         
     def _dump_feat(self):
         if self.dump_mode == "a":
             update_calendar = sorted(list(set(self.calendar) - set(self.old_calendar)))
-            update_data = self.data.loc(axis=0)[:, update_calendar]
+            update_cdata = self.data.loc(axis=0)[update_calendar, self.old_instruments.index]
+            update_instruments = sorted(list(set(self.instruments.index) - set(self.old_instruments.index)))
+            update_idata = self.data.loc(axis=0)[self.calendar, update_instruments]
         else:
-            update_data = self.data
+            update_idata = self.data
+            update_cdata = pd.DataFrame()
 
         def _ensure_path(code):
             code_path = self.feature_path.joinpath(code.lower())
@@ -186,36 +194,38 @@ class FileDumper(FileDumperBase):
             return code_path
 
         def _overwrite(data):
-            code_path = _ensure_path(data.index.get_level_values(0)[0])
+            code_path = _ensure_path(data.index.get_level_values(1)[0])
             for feat in self.data.columns:
-                np.hstack([self.calendar.index(data.index.get_level_values(1)[0]), 
+                np.hstack([self.calendar.get_indexer(data.index.get_level_values(0)[:1])[0], 
                     data[feat].values]).astype('float32').tofile(
                         code_path.joinpath(f'{feat}.{self.freq}.{FileDumperBase.SUFFIX}'))
         
         def _update(data):
-            code_path = _ensure_path(data.index.get_level_values(0)[0])
+            code_path = _ensure_path(data.index.get_level_values(1)[0])
             for feat in self.data.columns:
                 with open(code_path.joinpath(f'{feat}.{self.freq}.{FileDumperBase.SUFFIX}'), 'ab') as f: 
                     data.loc[:, feat].values.astype('float32').tofile(f)
 
-        if update_data.empty:
-            print('Your data is up-to-date!')
-            return
-        update_data.groupby(level=0).apply(_overwrite if self.dump_mode != "a" else _update)
-
+        if not update_cdata.empty:
+            # only 'a' mode can access this
+            update_cdata.groupby(level=1).apply(_update)
+        if not update_idata.empty:
+            # no matter 'a' mode or 'w' mode, new instrument must be created
+            update_idata.groupby(level=1).apply(_overwrite)
+        
+        print('Your data is now up-to-date!')
         return self
         
     def dump(self, **kwargs):
         if self.dump_mode == "a":
             self.old_calendar = pd.read_csv(self.calendar_path.joinpath(f"{self.freq}.txt"), 
-                header=None, parse_dates=[0]).iloc[:, 0].to_list()
+                header=None, parse_dates=[0]).iloc[:, 0]
             self.old_instruments = pd.read_csv(self.instrument_path.joinpath("all.txt"), 
                 header=None, sep='\t', index_col=0, parse_dates=[1, 2])
             self.old_instruments.columns = [FileDumperBase.INSTSTARTNAME, FileDumperBase.INSTENDNAME]
         
-        self.data = self._load_data(**kwargs)._process_data()
-        self.instruments = self.data.index.levels[0].sort_values().to_list()
-        self.calendar = self.data.index.levels[1].sort_values().to_list()
+        self._load_data(**kwargs)._process_data()
+        self.calendar = self.data.index.levels[0].sort_values()
 
         self._dump_cal()._dump_inst()._dump_feat()
 
@@ -282,12 +292,40 @@ class IndexCompDumper(FileDumper):
     
 
 if __name__ == "__main__":
+    dumper = FileDumper(
+        file_path = "data/kline-day/daily_stock_trade_data.feather",
+        file_type = "feather",
+        date_field = "date",
+        inst_field = "stock_code",
+        dump_field = None,
+        dump_path = "./data/qlib-day",
+        dump_mode = "w",
+        name_pattern = None,
+        freq = "day",
+    )
+    dumper.dump()
+
+    dumper = FileDumper(
+        file_path = "data/index-market-daily/index-market-daily.parquet",
+        file_type = "parquet",
+        date_field = None,
+        inst_field = None,
+        dump_field = None,
+        dump_path = "./data/qlib-day",
+        dump_mode = "a",
+        name_pattern = None,
+        freq = "day",
+    )
+    dumper.dump()
+
     dumper = IndexCompDumper(
-        file_path = "data/index-weights/",
+        file_path = "./data/index-weights/index-weights.parquet",
         file_type = "parquet",
         date_field = None,
         inst_field = None,
         index_field = 1,
-        dump_path = "./data/qlib-day",
+        dump_path = "./data/qlib-day/",
+        name_pattern = None,
+        name_col = None
     )
     dumper.dump()
