@@ -1,6 +1,8 @@
-import pandas as pd
+import struct
 import numpy as np
+import pandas as pd
 from pathlib import Path
+
 
 class Dumper:
     _DATE_LEV = 0
@@ -226,3 +228,114 @@ class IndexCompDumper(Dumper):
     
     def dump(self):
         self._dump_inst()
+
+
+class PDumper:
+
+    _IDX_TYPE = 'I'
+    _PERIOD_TYPE = 'I'
+    _ANN_TYPE = 'I'
+    _VALUE_TYPE = 'd'
+    _NEXT_TYPE = 'I'
+    _ROW_SIZE = struct.calcsize(''.join([
+        _PERIOD_TYPE, _ANN_TYPE,
+        _VALUE_TYPE, _NEXT_TYPE,
+    ]))
+    _NAN_ADDR = 0xFFFFFFFF
+    
+    def __init__(
+        self,
+        data: 'pd.DataFrame | pd.Seires',
+        *,
+        inst_col: str = None,
+        ann_col: str = None,
+        period_col: str = None,
+        uri: str = './qlib_day',
+        mode: str = "w",
+        freq: str = "q",
+    ):
+        """NOTE: Now only 'w' mode is supported, evertime we just
+        pouring all data into database and replace all existing data.
+        """
+        self._ann_col = ann_col
+        self._period_col = period_col
+        self._inst_col = inst_col
+        self._mode = mode
+        self._data = data
+        self._freq = freq
+        self._uri = Path(uri)
+        self._financial_dir = self._uri.joinpath('financial')
+        self._process_data()
+        self._financial_dir.mkdir(parents=True, exist_ok=True)
+
+    def _process_data(self):
+        # 1. We don't allow any meaningful index, for it's unnecessary
+        # 2. format the date related column to datetime64[ns]
+        # 3. converting the value columns to float64
+        assert (self._inst_col is not None and self._ann_col is not None
+            and self._period_col is not None), "You should use data without index"
+        
+        type_dict = {
+            self._period_col: "datetime64[ns]",
+            self._ann_col: "datetime64[ns]",
+            self._inst_col: "object"
+        }
+        type_dict.update(dict(zip(
+            self._data.columns.difference([self._period_col, self._ann_col, self._inst_col]),
+            ["float64" for _ in range(self._data.columns.size - 3)]
+        )))
+        self._data = self._data.astype(type_dict)
+        
+    def _dump(self, data):
+        """Assuming data we get here have three columns, report_date, ann_date and values"""
+
+        def _save(d):
+            feat_name = d.index.get_level_values(-1)[0]
+            d = d.droplevel(-1).reset_index()
+            d[self._period_col] = d[self._period_col].map(
+                lambda x: x.year * 100 + x.month // 4 + 1)
+            d[self._ann_col] = d[self._ann_col].map(
+                lambda x: x.year* 10000 + x.month * 100 + x.day)
+            dp = d[self._period_col].duplicated(keep='last')
+            d['_next'] = ~dp * PDumper._NAN_ADDR
+            d.loc[dp, '_next'] = (d[dp].index + 1) * PDumper._ROW_SIZE
+            d = d.loc[:, [self._ann_col, self._period_col, feat_name, '_next']].astype({
+                self._ann_col: PDumper._ANN_TYPE,
+                self._period_col: PDumper._PERIOD_TYPE,
+                feat_name: PDumper._VALUE_TYPE,
+                '_next': PDumper._NEXT_TYPE,
+            })
+            np.array(list(map(tuple, d.values)), dtype = [
+                ('date', PDumper._ANN_TYPE),
+                ('period', PDumper._PERIOD_TYPE),
+                ('value', PDumper._VALUE_TYPE),
+                ('_next', PDumper._NEXT_TYPE)
+            ]).tofile(code_path.joinpath(f'{feat_name.lower()}_{self._freq}.data'))
+            i = np.hstack([
+                d[self._period_col].min() // 100, *[PDumper._NAN_ADDR] * (d[self._period_col].min() % 100 - 1),
+                d[~d[self._period_col].duplicated(keep='first')].index * PDumper._ROW_SIZE, *[PDumper._NAN_ADDR]
+                * (4 - d[self._period_col].max() % 100)]).astype(PDumper._IDX_TYPE)
+            i.tofile(code_path.joinpath(f'{feat_name.lower()}_{self._freq}.index'))
+            
+        # 1. transforming the report_col to a non-leaping date_range, then enter _save function
+        # 2. calculating _next col and constructing the index data
+        # 3. transform data into corresponding format and save
+        code = data[self._inst_col].iloc[0]
+        code_path = self._financial_dir.joinpath(code.lower())
+        code_path.mkdir(parents=True, exist_ok=True)
+        data = data.drop(self._inst_col, axis=1)
+
+        data = data.set_index(self._period_col)
+        duplicated = data.index.duplicated(keep='first')
+        nodudata: pd.DataFrame = data[~duplicated]
+        nodudata = nodudata.reindex(pd.date_range(
+            nodudata.index.min(), nodudata.index.max(), freq='q'))
+        nodudata.index.name = self._period_col
+        data = pd.concat([nodudata, data.loc[duplicated]]).sort_index()
+        data = data.ffill().dropna(axis=0, subset=self._ann_col)
+        data = data.set_index(self._ann_col, append=True).stack()
+
+        data.groupby(level=-1).apply(_save)
+
+    def dump(self):
+        self._data.groupby(self._inst_col).apply(self._dump)
