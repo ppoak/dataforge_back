@@ -170,3 +170,4 @@ data/*
 !data/*.url
 .vscode
 output
+tests
