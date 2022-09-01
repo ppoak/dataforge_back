@@ -1,35 +1,8 @@
-import re
 import time
 import random
 import requests
 import pandas as pd
-import akshare as ak
-from functools import partial
 
-
-def get_stock_code():
-    codes = ak.stock_zh_a_spot_em()['代码'].sort_values().tolist()
-    func = partial(format_code, formatstr='{market}{code}')
-    codes = list(map(func, codes))
-    return codes
-
-def format_code(code, format_str = '{market}.{code}'):
-    if len(c := code.split('.')) == 2:
-        dig_code = c.pop(0 if c[0].isdigit() else 1)
-        market_code = c[0]
-        return format_str.format(market=market_code, code=dig_code)
-    elif len(code.split('.')) == 1:
-        sh_code_pat = '6\d{5}|9\d{5}'
-        sz_code_pat = '0\d{5}|2\d{5}|3\d{5}'
-        bj_code_pat = '8\d{5}|4\d{5}'
-        if re.match(sh_code_pat, code):
-            return format_str.format(code=code, market='sh')
-        if re.match(sz_code_pat, code):
-            return format_str.format(code=code, market='sz')
-        if re.match(bj_code_pat, code):
-            return format_str.format(code=code, market='bj')
-    else:
-        raise ValueError("Your input code is not unstood")
 
 def get_proxy(page_size: int = 20):
     headers = {
@@ -84,3 +57,20 @@ def proxy_request(
                 if verbose:
                     print(f'[-] [{e}] {url}, try {try_times + 1}/{retry}')
                 time.sleep(delay)
+
+def chinese_holidays():
+    root = 'https://api.apihubs.cn/holiday/get'
+    complete = False
+    page = 1
+    holidays = []
+    while not complete:
+        params = f'?field=date&holiday_recess=1&cn=1&page={page}&size=366'
+        url = root + params
+        data = requests.get(url, verbose=False).get().json['data']
+        if data['page'] * data['size'] >= data['total']:
+            complete = True
+        days = pd.DataFrame(data['list']).date.astype('str')\
+            .astype('datetime64[ns]').to_list()
+        holidays += days
+        page += 1
+    return 
