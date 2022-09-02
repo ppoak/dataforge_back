@@ -167,7 +167,8 @@ cython_debug/
 
 .DS_Store
 data/*
-!data/*.url
 .vscode
 output
 dev
+asset
+!asset/*.md
