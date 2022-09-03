@@ -166,9 +166,13 @@ cython_debug/
 # End of https://www.toptal.com/developers/gitignore/api/python
 
 .DS_Store
-data/*
+
+data/cache
+data/intermediate
+data/kline_daily
+data/kline_min
+data/qlib_day
+
 .vscode
 output
 dev
-asset
-!asset/*.md
