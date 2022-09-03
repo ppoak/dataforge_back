@@ -167,8 +167,10 @@ cython_debug/
 
 .DS_Store
 
-data/cache
+**/cache
+
 data/intermediate
+data/derivative_indicators
 data/kline_daily
 data/kline_min
 data/qlib_day

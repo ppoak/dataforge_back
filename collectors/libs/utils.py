@@ -18,7 +18,7 @@ def get_proxy(page_size: int = 20):
         data['类型'] = data['类型'].str.lower()
         proxy = (data['类型'] + '://' + data['IP'] + ':' + data['PORT'].astype('str')).to_list()
         proxies += list(map(lambda x: {x.split('://')[0]: x}, proxy))
-        time.sleep(0.8)
+        time.sleep(1.2)
     available_proxies = []
     
     for proxy in proxies:

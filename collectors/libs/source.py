@@ -9,7 +9,7 @@ from math import ceil
 from tqdm import tqdm
 from bs4 import BeautifulSoup
 from urllib.parse import quote
-from tools.base import strip_stock_code, format_code
+from .utils import strip_stock_code, format_code
 
 
 class AkShare:
