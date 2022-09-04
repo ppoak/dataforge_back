@@ -171,6 +171,7 @@ cython_debug/
 
 data/intermediate
 data/derivative_indicators
+data/financials
 data/kline_daily
 data/kline_min
 data/qlib_day
@@ -178,3 +179,4 @@ data/qlib_day
 .vscode
 output
 dev
+logs

@@ -3,6 +3,7 @@ import time
 import random
 import datetime
 import requests
+import numpy as np
 import pandas as pd
 import akshare as ak
 from math import ceil
@@ -118,17 +119,77 @@ class AkShare:
         return data
 
     @classmethod
-    def balance_sheet(cls, code: str):
-        # more infomation, please refer to this website:
-        # https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/Index?type=web&code=sz000001#lrb-0
-        code = format_code(code, formatstr='{market}{code}')
-        data = ak.stock_balance_sheet_by_report_em(symbol=code)
-        if data.empty:
-            return data
-        else:
-            data.REPORT_DATE = pd.to_datetime(data.REPORT_DATE)
+    def balance_sheet(cls, code):
+        try:
+            data = ak.stock_balance_sheet_by_report_em(symbol=code)
+            if data.empty:
+                return None
+            data = data.drop([
+                'SECURITY_CODE', 'SECURITY_NAME_ABBR', 'ORG_CODE', 'ORG_TYPE', 'REPORT_TYPE',
+                'REPORT_DATE_NAME', 'SECURITY_TYPE_CODE', 'UPDATE_DATE', 'CURRENCY', 'LISTING_STATE'
+            ], axis=1)
+            data = data.replace({None: np.nan})
+            data = data.astype('float32', errors='ignore')
+            data[['REPORT_DATE', 'NOTICE_DATE']] = data[['REPORT_DATE', 'NOTICE_DATE']].astype('datetime64[ns]')
             data = data.set_index('REPORT_DATE')
+            data = data.reindex(pd.date_range(data.index.min(), data.index.max(), freq='q'))
+            data['SECUCODE'] = data['SECUCODE'][~data['SECUCODE'].isna()].iloc[0]
+            data = data.set_index(['SECUCODE', 'NOTICE_DATE'], append=True)
+            data.index.names = ['report_date', 'secucode', 'notice_date']
+            data = data.rename(columns=lambda x: x.lower())
             return data
+        except:
+            print(f'{code} get balance sheet failed!, please try again mannually')
+            return None
+
+    @classmethod
+    def profit_sheet(cls, code):
+        try:
+            data = ak.stock_profit_sheet_by_report_em(symbol=code)
+            if data.empty:
+                return None
+            data = data.drop([
+                'SECURITY_CODE', 'SECURITY_NAME_ABBR', 'ORG_CODE', 'ORG_TYPE', 'REPORT_TYPE',
+                'REPORT_DATE_NAME', 'SECURITY_TYPE_CODE', 'UPDATE_DATE', 'CURRENCY'
+            ], axis=1)
+            data = data.replace({None: np.nan})
+            data = data.astype('float32', errors='ignore')
+            data[['REPORT_DATE', 'NOTICE_DATE']] = data[['REPORT_DATE', 'NOTICE_DATE']].astype('datetime64[ns]')
+            data = data.set_index('REPORT_DATE')
+            data = data.reindex(pd.date_range(data.index.min(), data.index.max(), freq='q'))
+            data['SECUCODE'] = data['SECUCODE'][~data['SECUCODE'].isna()].iloc[0]
+            data = data.set_index(['SECUCODE', 'NOTICE_DATE'], append=True)
+            data.index.names = ['report_date', 'secucode', 'notice_date']
+            data = data.rename(columns=lambda x: x.lower())
+            return data
+        except:
+            print(f'{code} get balance sheet failed!, please try again mannually')
+            return None
+
+    @classmethod
+    def cashflow_sheet(cls, code):
+        try:
+            data = ak.stock_cash_flow_sheet_by_report_em(symbol=code)
+            if data.empty:
+                return None
+            data = data.drop([
+                'SECURITY_CODE', 'SECURITY_NAME_ABBR', 'ORG_CODE', 'ORG_TYPE', 'REPORT_TYPE',
+                'REPORT_DATE_NAME', 'SECURITY_TYPE_CODE', 'UPDATE_DATE', 'CURRENCY'
+            ], axis=1)
+            data = data.replace({None: np.nan})
+            data = data.astype('float32', errors='ignore')
+            data[['REPORT_DATE', 'NOTICE_DATE']] = data[['REPORT_DATE', 'NOTICE_DATE']].astype('datetime64[ns]')
+            data = data.set_index('REPORT_DATE')
+            data = data.reindex(pd.date_range(data.index.min(), data.index.max(), freq='q'))
+            data['SECUCODE'] = data['SECUCODE'][~data['SECUCODE'].isna()].iloc[0]
+            data = data.set_index(['SECUCODE', 'NOTICE_DATE'], append=True)
+            data.index.names = ['report_date', 'secucode', 'notice_date']
+            data = data.rename(columns=lambda x: x.lower())
+            return data
+        except:
+            print(f'{code} get balance sheet failed!, please try again mannually')
+            return None
+
         
     @classmethod
     def index_weight(cls, code: str):
