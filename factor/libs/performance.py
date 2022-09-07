@@ -4,6 +4,7 @@ import pandas as pd
 
 def rebalance(
     pred_label: pd.DataFrame,
+    benchmark: pd.Series = None,
     score_col: str = 'score',
     label_col: str = 'label',
     date_level: int = 0,
@@ -14,14 +15,13 @@ def rebalance(
 ):
     if reverse:
         pred_label[score_col] *= -1
-    pred_label = pred_label.sort_values(score_col, ascending=False)
 
     # Group1 ~ Group5 only consider the dropna values
     pred_label_drop = pred_label.dropna(subset=[score_col])
     # Group
-    quantiles = pred_label_drop.groupby(level=date_level)[label_col].apply(
+    quantiles = pred_label_drop.groupby(level=date_level)[score_col].apply(
         lambda x: pd.Series([i for i in range(1, N) for _ in range(len(x) // N)] + 
-            [N] * (len(x) - (len(x) // N) * (N - 1)), index = x.index)
+            [N] * (len(x) - (len(x) // N) * (N - 1)), index=x.sort_values().index.get_level_values(1))
     )
     quantiles = quantiles.sort_index()
 
@@ -29,7 +29,7 @@ def rebalance(
     weights = pd.Series(np.ones_like(quantiles), index=quantiles.index)
     weights = weights.groupby([quantiles, pd.Grouper(level=date_level)]).apply(lambda x: x / x.sum() * 1 / (period + 1) )
     profit = weights.groupby([quantiles, pd.Grouper(level=0)]).apply(
-        lambda x: (x * pred_label.loc[x.index.get_level_values(0)[0], label_col]).sum()
+        lambda x: (x.droplevel(0) * pred_label.loc[x.index.get_level_values(0)[0], label_col]).sum()
     ).unstack(level=0)
     
     panel_weights = weights.unstack().stack(dropna=False).fillna(0)
@@ -49,10 +49,10 @@ def rebalance(
         turnovers.append(turnover)
     turnover = pd.concat(turnovers, axis=0).sort_index().unstack(level=0)
     profit -= commission_ratio * turnover
-    cumprofit = (profit.shift(period + 1).fillna(0) + 1).cumprod()
+    profit = profit.shift(1).fillna(0)
+    profit['benchmark'] = benchmark
     return {
         "profit": profit,
-        "cumprofit": cumprofit,
         "turnover": turnover,
     }
         

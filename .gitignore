@@ -174,7 +174,10 @@ data/derivative_indicators
 data/financials
 data/kline_daily
 data/kline_min
+data/index
 data/qlib_day
+
+**/mlruns
 
 .vscode
 output
