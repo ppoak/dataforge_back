@@ -178,6 +178,7 @@ data/index
 data/qlib_day
 
 **/mlruns
+**/*.db
 
 .vscode
 output

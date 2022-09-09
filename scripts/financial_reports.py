@@ -1,5 +1,5 @@
-import sys
-sys.path.append('.')
+import os 
+os.chdir('/root/Quant')
 
 import pandas as pd
 import akshare as ak

@@ -6,6 +6,8 @@ from joblib import Parallel, delayed
 
 import sys
 sys.path.append('.')
+import os
+os.chdir("/root/Quant")
 from collectors.libs.utils import format_code
 
 
