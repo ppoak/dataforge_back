@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from models import DNNModel
+from factor.libs.models import DNNModel
 
 
 class RollingTrain:
