@@ -39,8 +39,8 @@ def rebalance(
     # only consider the dropna values
     pred_label_drop = pred_ret.dropna(subset=[score_col])
     quantiles = pred_label_drop.groupby(level=date_level)[score_col].apply(
-        lambda x: pd.Series([i for i in range(1, N) for _ in range(len(x) // N)] + 
-            [N] * (len(x) - (len(x) // N) * (N - 1)), index=x.sort_values().index.get_level_values(1))
+        lambda x: pd.Series([i for i in range(N, 1, -1) for _ in range(len(x) // N)] + 
+            [1] * (len(x) - (len(x) // N) * (N - 1)), index=x.sort_values(ascending=False).index.get_level_values(1))
     )
 
     # constructing weight and compute profit without commission
