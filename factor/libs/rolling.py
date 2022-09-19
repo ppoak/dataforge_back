@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from libs.models import DNNModel
+from libs.models import DNNModel, LGBModel
 
 
 class RollingTrain:
@@ -57,10 +57,10 @@ class RollingTrain:
             test = dataset.loc[datetime_index[pred_start_idx]:datetime_index[pred_end_idx]]
             
             if i <= learn_epoch:
-                results = model.fit(train, test)
-                epochs.append(len(results['train']['loss']))
+                epoch, results = model.fit(train, test)
+                epochs.append(epoch)
             else:
-                results = model.fit(train, train, max_epoch=int(np.mean(epochs)))
+                results = model.fit(train, train, max_iter=int(np.mean(epochs)))
 
             pred = model.predict(test)
             # selected = pred.groupby(level=0).apply(lambda x: 
@@ -77,21 +77,17 @@ if __name__ == "__main__":
     data = pd.read_parquet('data/intermediate/feature_info/normalized_dataset.parquet')
     ret = pd.read_parquet('data/intermediate/forward_return/1d_open_open.parquet')
     RollingTrain(
-        min_days = 100,
-        max_days = 120,
+        min_days = 120,
+        max_days = 140,
         pred_days = 20,
-        exp_name = 'onlypred_test'
+        exp_name = 'lgbm'
     ).rolling(
-        DNNModel(
+        LGBModel(
             ret = ret,
-            optimizer_kwargs={
-                "weight_decay": 0.001,
-                "lr": 0.01,
-            },
-            epoch = 70,
-            batch_size=1000,
-            ret_stop = 20,
+            learning_rate = 0.01,
+            num_leaves = 100,
+            max_depth = 5,
         ),
-        dataset=data,
+        dataset = data,
         learn_epoch=200,
     )

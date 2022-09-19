@@ -1,7 +1,8 @@
 import torch
 import numpy as np
-import torch.nn as nn
 import pandas as pd
+import torch.nn as nn
+import lightgbm as lgb
 from copy import deepcopy
 from torch.utils.data import Dataset, DataLoader
 
@@ -111,10 +112,7 @@ class DNNModel:
         self.scheduler: torch.optim.lr_scheduler._LRScheduler = getattr(
             torch.optim.lr_scheduler, scheduler)(**scheduler_kwargs)
     
-    def train_epoch(
-        self,
-        train,
-    ):
+    def train_epoch(self, train):
         for i, (feature, label) in enumerate(train):
             self.dnn_model.train()
             pred = self.dnn_model(feature)
@@ -126,10 +124,7 @@ class DNNModel:
             if (i + 1) % self.eval_steps == 0 or (i + 1) == len(train):
                 print(f"[Batch {i + 1}] loss on train {loss.item()}")
 
-    def test_epoch(
-        self,
-        test
-    ):
+    def test_epoch(self, test):
         self.dnn_model.eval()
         with torch.no_grad():
             preds = self.dnn_model(torch.from_numpy(test['feature'].values))
@@ -143,12 +138,14 @@ class DNNModel:
                 f"Top Portfolio Mean Return {top_ret.sum().iloc[0]:.4f}")
         return test_loss.item(), top_ret.sum().iloc[0]
 
-    def fit(
-        self,
-        train,
-        test,
-        max_epoch = np.inf,
-    ):
+    def fit(self, train, test, max_epoch = np.inf):
+        """Fit the train and test data
+        -------------------------------
+        
+        In order to use all the available data, we don't set valid dataset.
+        Instead, we can use the test dataset to verify the best model parameters,
+        then use the parameter like ``epoch`` to train data
+        """
         results = {
             "train": {"loss": [], "top_ret": []}, 
             "test": {"loss": [], "top_ret": []},
@@ -234,27 +231,130 @@ class DNN(nn.Module):
         return cur_output
 
 
+class LGBModel:
+
+    def __init__(
+        self,
+        ret,
+        top = 0.1,
+        boosting_type = "gbdt",
+        n_estimators = 1000,
+        learning_rate = 0.01,
+        num_leaves = 100,
+        max_depth = 5,
+        subsample = 0.72,
+        subsample_freq = 10,
+        colsample_bytree = 1,
+        reg_alpha = 0.01,
+        reg_lambda = 0.001,
+        min_child_samples = 100,
+    ) -> None:
+        self.ret = ret
+        self.top = top
+        self.boosting_type = boosting_type
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.num_leaves = num_leaves
+        self.max_depth = max_depth
+        self.subsample = subsample
+        self.subsample_freq = subsample_freq
+        self.colsample_bytree = colsample_bytree
+        self.reg_alpha = reg_alpha
+        self.reg_lambda = reg_lambda
+        self.min_child_samples = min_child_samples
+    
+    def test_tree(self, y_true, y_pred):
+        y_true = self.ret.loc[self.test_index]
+        y_pred = pd.Series(y_pred, index=y_true.index)
+        select = y_pred.groupby(level=0).apply(
+            lambda x: x.sort_values(ascending=False).iloc[:int(len(x) * self.top)]
+        ).droplevel(0).index
+        ret = y_true.squeeze().loc[select].groupby(level=0).mean().sum()
+        return ("Top Return", ret, True)
+    
+    def fit(self, train, test, max_iter = None):
+        if max_iter is None:
+            self.test_index = test.index
+            self.model = lgb.LGBMRegressor(
+                boosting_type = self.boosting_type,
+                n_estimators = self.n_estimators,
+                learning_rate = self.learning_rate,
+                num_leaves = self.num_leaves,
+                max_depth = self.max_depth,
+                subsample = self.subsample,
+                subsample_freq = self.subsample_freq,
+                colsample_bytree = self.colsample_bytree,
+                reg_alpha = self.reg_alpha,
+                reg_lambda = self.reg_lambda,
+                min_child_samples = self.min_child_samples,
+            )
+            self.model.fit(
+                train['feature'].values, 
+                train['label'].values.reshape(-1), 
+                eval_set = [(test['feature'].values, test['label'].values.reshape(-1))],
+                eval_names = ['Test'],
+                eval_metric = self.test_tree,
+                early_stopping_rounds = 50,
+            )
+            return len(self.model.evals_result_['Test']['Top Return']), self.model.evals_result_
+        else:
+            self.model = lgb.LGBMRegressor(
+                boosting_type = self.boosting_type,
+                n_estimators = max_iter,
+                learning_rate = self.learning_rate,
+                num_leaves = self.num_leaves,
+                max_depth = self.max_depth,
+                subsample = self.subsample,
+                subsample_freq = self.subsample_freq,
+                colsample_bytree = self.colsample_bytree,
+                reg_alpha = self.reg_alpha,
+                reg_lambda = self.reg_lambda,
+                min_child_samples = self.min_child_samples,
+            )
+            self.model.fit(
+                train['feature'].values, 
+                train['label'].values.reshape(-1), 
+            )
+    
+    def predict(self, test):
+        pred = self.model.predict(test['feature'].values)
+        pred = pd.Series(pred, index=test.index)
+        return pred
+
+
+class TabNetModel:
+
+    def __init__(
+        self,
+        n_d = 8,
+        n_a = 8,
+        n_steps = 10,
+        gamma = 1.3,
+        n_independent = 2,
+        n_shared = 2,
+        epsilon = 1e-15,
+        momentum = 0.02,
+        clip_value = None,
+        lambda_sparse = 1e-3,
+        optimizer_fn = torch.optim.Adam,
+        optimizer_params = {"lr": 2e-2},
+        verbose = 1,
+    ):
+        pass
+
+
 if __name__ == "__main__":
     data = pd.read_parquet('data/intermediate/feature_info/normalized_dataset.parquet')
-    ret = pd.read_parquet('data/intermediate/forward_return/1d_open_open.parquet')
+    ret = pd.read_parquet('data/intermediate/forward_return/1d_open_open.parquet').sort_index()
     train = data.loc["2018-01-01":"2018-03-31"]
     test = data.loc["2018-04-01":"2018-04-20"]
-    model = DNNModel(
+    model = LGBModel(
         ret = ret,
-        optimizer_kwargs={
-            "weight_decay": 0.001,
-            "lr": 0.01,
-        },
-        epoch = 50,
-        batch_size=1000,
-        ret_stop = 20,
     )
     results = model.fit(train, test)
     
     import matplotlib.pyplot as plt
-    _, axes = plt.subplots(nrows=2, ncols=2, figsize=(24, 16))
-    axes[0][0].plot(results['train']['loss'])
-    axes[0][1].plot(results['train']['top_ret'])
-    axes[1][0].plot(results['test']['loss'])
-    axes[1][1].plot(results['test']['top_ret'])
+    _, axes = plt.subplots(nrows=2, ncols=1, figsize=(24, 16))
+    axes[0].plot(results['Test']['l2'])
+    axes[1].plot(results['Test']['Top Return'])
     plt.savefig('test.png')
