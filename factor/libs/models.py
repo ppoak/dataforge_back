@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from pytorch_tabnet.metrics import Metric
 from lightgbm.callback import EarlyStopException
 from pytorch_tabnet.tab_model import TabNetRegressor
+from sklearn.model_selection import KFold
 
 
 class TopRetModelBase:
@@ -26,6 +27,79 @@ class TopRetModelBase:
     @abc.abstractmethod
     def predict(self, test: pd.DataFrame) -> pd.Series:
         raise NotImplementedError("subclasses should implement predict method")
+
+
+class LinearModel(TopRetModelBase):
+    def __init__(
+        self, 
+        ret,
+        top = 0.1,
+        ret_stop = 10,
+        in_feature = 5,
+        out_feature = 1,
+        epoch = 100,
+        batch_size = 1024,
+        optimizer_cls = torch.optim.AdamW,
+        optimizer_kwargs = {"lr": 1e-2, "weight_decay": 1e-2, "betas": (0.9, 0.999)},
+    ):
+        self.ret = ret
+        self.top = top
+        self.ret_stop = ret_stop
+        self.in_feature = in_feature
+        self.out_feature = out_feature
+        self.epoch = epoch
+        self.batch_size = batch_size
+        self.optimizer = optimizer_cls
+        self.optimizer_kwargs = optimizer_kwargs
+        
+    def fit(self, train: pd.DataFrame, valid: pd.DataFrame = None, force_iter: int = None, **kwargs):
+        self.model = Linear(in_features=self.in_feature, out_features=self.out_feature)
+        train_dataset = DataLoader(TorchDataset(train), batch_size=self.batch_size)
+        self.optimizer_kwargs.update({"params": self.model.parameters()})
+        self.optimizer = self.optimizer(**self.optimizer_kwargs)
+        loss_fn = nn.MSELoss(reduction='mean')
+        best_score = -np.inf
+        best_iter = 0
+        for epoch in range(self.epoch if force_iter is None else force_iter):
+            self.model.train()
+            for step, (feature, label) in enumerate(train_dataset):
+                pred = self.model(feature.float())
+                loss = loss_fn(pred, label)
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+            if valid is not None:
+                top_ret = self.ret.loc[self.predict(valid).groupby(level=0).apply(
+                    lambda x: x.sort_values(ascending=False).iloc[:int(len(x) * self.top)]
+                ).droplevel(0).index].groupby(level=0).mean().squeeze().sum()
+                print(f"[Epoch {epoch + 1}] Top Return: {top_ret}")
+                if top_ret > best_score:
+                    best_score = top_ret
+                    best_iter = epoch
+                    model_param = deepcopy(self.model.state_dict())
+                if epoch - best_iter >= self.ret_stop:
+                    break
+        self.model.load_state_dict(model_param)
+        return self
+    
+    def predict(self, test: pd.DataFrame):
+        self.model.eval()
+        with torch.no_grad():
+            return pd.Series(
+                self.model(torch.from_numpy(test['feature'].values).float()).detach().numpy().reshape(-1),
+                index=test.index,
+            )
+
+
+class Linear(nn.Module):
+    def __init__(self, in_features: int = 5, out_features: int = 1):
+        super(Linear, self).__init__()
+        self.bn = nn.BatchNorm1d(num_features=in_features)
+        self.linear = nn.Linear(in_features=in_features, out_features=out_features)
+        self.seq = nn.Sequential(self.bn, self.linear)
+    
+    def forward(self, x):
+        return self.seq(x)
 
 
 class DNNModel(TopRetModelBase):
@@ -79,7 +153,6 @@ class DNNModel(TopRetModelBase):
             }
         self.model = DNN(**dnn_kwargs)
         self.model.to(self.device)
-        print(self.model)
 
         if optimizer is None:
             optimizer = "SGD"
@@ -319,7 +392,8 @@ class LGBModel(TopRetModelBase):
         force_iter: int = None
     ):
         if force_iter is None:
-            self.valid_index = valid.index
+            if valid is not None:
+                self.valid_index = valid.index
             trees = self.n_estimators
         else:
             trees = force_iter
@@ -754,3 +828,130 @@ class DoubleEnsembleModel(TopRetModelBase):
             res.append(pd.Series(_model.feature_importance(*args, **kwargs), index=_model.feature_name()) * _weight)
         return pd.concat(res, axis=1, sort=False).sum(axis=1).sort_values(ascending=False)
 
+
+class FusionModel(TopRetModelBase):
+    def __init__(
+        self,
+        ret,
+        models: list,
+        model_kwargs: list[dict],
+        fusion: TopRetModelBase = None,
+        top = 0.1,
+        ret_stop = 10,
+        method: str = 'stacking',
+    ):
+        self.ret = ret
+        self.top = top
+        self.ret_stop = ret_stop
+        self.fusion = fusion
+        assert method != 'average' and fusion is not None,\
+            "If fusion method is not simple average, a second-level model should be specified"
+        self.models = models
+        for kw in model_kwargs:
+            kw.update({'ret': ret})
+        self.model_kwargs = model_kwargs
+        self.method = method
+
+        method = getattr(self, f"_{self.method}_fit")
+        if method is None:
+            raise ValueError(f"Method {self.method} is not supported")
+            
+        assert len(self.models) == len(self.model_kwargs), \
+            'The number of model and keyword arguments should match!'
+
+    def _average_fit(self, train: pd.DataFrame, valid: pd.DataFrame, force_iter: int = None, **kwargs):
+        models = [self.models[i](self.model_kwargs[i]) for i in range(len(self.models))]
+        self.models = []
+        for model in models:
+            model.fit(train, valid, force_iter, **kwargs)
+            self.models.append(model)
+
+    def _stacking_fit(
+        self,
+        train: pd.DataFrame,
+        valid: pd.DataFrame,
+        force_iter: int = None,
+        kfold: int = None,
+        **kwargs,
+    ):
+        models = [self.models[i](**self.model_kwargs[i]) for i in range(len(self.models))]
+        if kfold is None:
+            kfold = len(models)
+        self.models = []
+        kf = KFold(n_splits=kfold)
+        pred_trains_ = []
+        pred_valids_ = []
+        for model in models:
+            # for every model, we apply kfold train
+            pred_trains = []
+            pred_valids = []
+            for train_index, test_index in kf.split(train):
+                # test by 1 fold, train by the others
+                model.fit(train.iloc[train_index], None, force_iter, **kwargs)
+                # the test fold is used as the data source for fusion model
+                pred_trains.append(model.predict(train.iloc[test_index]))
+                if valid is not None:
+                    pred_valids.append(model.predict(valid))
+            pred_train = pd.concat(pred_trains, axis=0)
+            if valid is not None:
+                pred_valid = pd.concat(pred_valids, axis=1).mean(axis=1)
+            self.models.append(model)
+            pred_trains_.append(pred_train)
+            if valid is not None:
+                pred_valids_.append(pred_valid)
+        pred_train = pd.concat(pred_trains_, axis=1)
+        pred_train = pd.concat([pred_train, train['label']], axis=1, keys=['feature', 'label'])
+        if valid is not None:
+            pred_valid = pd.concat(pred_valids_, axis=1)
+            pred_valid = pd.concat([pred_valid, valid['label']], axis=1, keys=['feature', 'label'])
+            self.fusion.fit(pred_train, pred_valid, force_iter, **kwargs)
+        else:
+            self.fusion.fit(pred_train, force_iter, **kwargs)
+    
+    # def _blending_fit(
+    #     self,
+    #     train: pd.DataFrame,
+    #     valid: pd.DataFrame,
+    #     force_iter: int = None,
+    #     **kwargs
+    # ):
+    #     models = [self.models[i](self.model_kwargs[i]) for i in range(len(self.models))]
+    #     self.models = []
+    #     pred_trains = []
+    #     pred_valids = []
+    #     for model in models:
+    #         model.fit(train)
+
+    def _voting_fit(self, train: pd.DataFrame, valid: pd.DataFrame, force_iter: int = None, **kwargs):
+        raise NotImplementedError("Voting is still under development")
+    
+    def _average_predict(self, test: pd.DataFrame, model_weight: None):
+        preds = []
+        for model in self.models:
+            preds.append(model.predict(test))
+        pred = pd.concat(preds, axis=1)
+        if model_weight is None:
+            model_weight = [1 for _ in range(len(self.models))]
+        pred = pred * model_weight
+        pred = pred.sum(axis=1) / sum(model_weight)
+        return pred
+    
+    def _stacking_predict(self, test: pd.DataFrame):
+        return self.fusion.predict(test)
+    
+    def _voting_predict(self, test: pd.DataFrame, model_weight: None):
+        raise NotImplementedError("Voting is still under development")
+
+    def fit(
+        self, 
+        train: pd.DataFrame,
+        valid: pd.DataFrame = None,
+        force_iter: int = None,
+        **kwargs
+    ):
+        getattr(self, f'_{self.method}_fit')(train, valid, force_iter, **kwargs)
+        return self
+    
+    def predict(self, test: pd.DataFrame, **kwargs):
+        return getattr(self, f"_{self.method}_predict")(test, **kwargs)
+        
