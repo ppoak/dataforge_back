@@ -176,6 +176,7 @@ data/kline_daily
 data/kline_min
 data/index
 data/qlib_day
+data/stock_pool
 
 **/mlruns
 **/*.db

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import torch.nn as nn
 import lightgbm as lgb
+from tqdm import tqdm
 from copy import deepcopy
 from operator import gt, lt
 from .utils import TorchDataset
@@ -51,6 +52,7 @@ class LinearModel(TopRetModelBase):
         self.batch_size = batch_size
         self.optimizer = optimizer_cls
         self.optimizer_kwargs = optimizer_kwargs
+        self.evals_result = None
         
     def fit(self, train: pd.DataFrame, valid: pd.DataFrame = None, force_iter: int = None, **kwargs):
         self.model = Linear(in_features=self.in_feature, out_features=self.out_feature)
@@ -60,6 +62,8 @@ class LinearModel(TopRetModelBase):
         loss_fn = nn.MSELoss(reduction='mean')
         best_score = -np.inf
         best_iter = 0
+        if valid is not None:
+            self.evals_result = {"valid": {"top_ret": []}}
         for epoch in range(self.epoch if force_iter is None else force_iter):
             self.model.train()
             for step, (feature, label) in enumerate(train_dataset):
@@ -72,12 +76,15 @@ class LinearModel(TopRetModelBase):
                 top_ret = self.ret.loc[self.predict(valid).groupby(level=0).apply(
                     lambda x: x.sort_values(ascending=False).iloc[:int(len(x) * self.top)]
                 ).droplevel(0).index].groupby(level=0).mean().squeeze().sum()
+                self.evals_result['valid']['top_ret'].append(top_ret)
                 print(f"[Epoch {epoch + 1}] Top Return: {top_ret}")
                 if top_ret > best_score:
                     best_score = top_ret
                     best_iter = epoch
                     model_param = deepcopy(self.model.state_dict())
                 if epoch - best_iter >= self.ret_stop:
+                    print(f"[Early Stop] Top Return didn't imporve in {self.ret_stop} epoch, quitting")
+                    print(f"[Early Stop] The best top return is {best_score} in epoch {best_iter}")
                     break
         self.model.load_state_dict(model_param)
         return self
@@ -155,7 +162,7 @@ class DNNModel(TopRetModelBase):
         self.model.to(self.device)
 
         if optimizer is None:
-            optimizer = "SGD"
+            optimizer = "AdamW"
         if optimizer_kwargs is None:
             optimizer_kwargs = {
                 "lr": 0.001,
@@ -193,19 +200,20 @@ class DNNModel(TopRetModelBase):
         self.scheduler: torch.optim.lr_scheduler._LRScheduler = getattr(
             torch.optim.lr_scheduler, scheduler)(**scheduler_kwargs)
     
-    def train_epoch(self, train: DataLoader):
-        for i, (feature, label) in enumerate(train):
-            self.model.train()
-            pred = self.model(feature)
-            loss = self.loss(pred, label)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+    def train_epoch(self, train: DataLoader, epoch: int):
+        with tqdm(total=len(train)) as pbar:
+            for i, (feature, label) in enumerate(train):
+                pbar.set_description(f'[Epoch {epoch}]')
+                self.model.train()
+                pred = self.model(feature)
+                loss = self.loss(pred, label)
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+                pbar.set_postfix(loss=loss.item())
+                pbar.update(1)
 
-            if (i + 1) % self.eval_steps == 0 or (i + 1) == len(train):
-                print(f"[Batch {i + 1}] loss on train {loss.item()}")
-
-    def test_epoch(self, test: pd.DataFrame):
+    def test_epoch(self, test: pd.DataFrame, epoch: int, name: str = 'valid'):
         self.model.eval()
         with torch.no_grad():
             preds = self.model(torch.from_numpy(test['feature'].values))
@@ -215,8 +223,8 @@ class DNNModel(TopRetModelBase):
                 lambda x: x.sort_values(ascending=False).iloc[:int(len(x) * self.top)]
             ).droplevel(0).index
             top_ret = self.ret.loc[select].squeeze().groupby(level=0).mean()
-            print(f"[Epoch] Loss: {test_loss.item():.4f}, "
-                f"Top Portfolio Mean Return {top_ret.sum():.4f}")
+            print(f"[Epoch {epoch}] {name} Loss: {test_loss.item():.4f}, "
+                f"{name} Top Portfolio Mean Return {top_ret.sum():.4f}")
         return test_loss.item(), top_ret.sum()
 
     def fit(
@@ -241,13 +249,13 @@ class DNNModel(TopRetModelBase):
         ret_stop = 0
         for epoch in range(1, self.epoch + 1 if force_iter is None else force_iter + 1):
             if ret_stop > self.ret_stop:
-                print(f"Top return didn't improve for {self.ret_stop} epoch, now quitting")
+                print(f"[Early Stop] Top return didn't improve "
+                    f"for {self.ret_stop} epoch, best score: {best_ret:.4f}")
                 break
-            print(f"{'-' * 20} Epoch {epoch} {'-' * 20}")
-            self.train_epoch(train_dataset)
-            train_loss, train_top_ret = self.test_epoch(train)
+            self.train_epoch(train_dataset, epoch)
+            train_loss, train_top_ret = self.test_epoch(train, epoch, "train")
             if valid is not None:
-                valid_loss, valid_top_ret = self.test_epoch(valid)
+                valid_loss, valid_top_ret = self.test_epoch(valid, epoch, "valid")
             else:
                 valid_loss, valid_top_ret = train_loss, train_top_ret
 
@@ -383,7 +391,14 @@ class LGBModel(TopRetModelBase):
                             f" best iteration: {best_iter[i]}")
                         raise EarlyStopException(best_iter[i], [best_score_list[i]])
                     
-        return _callback 
+        return _callback
+    
+    def print_evaluatoin(self, period: int = 50):
+        def _callback(env) -> None:
+            if period > 0 and env.evaluation_result_list and (env.iteration + 1) % period == 0:
+                print(f'[Tree {env.iteration + 1}]\tTop Return: {env.evaluation_result_list[1][2]}')
+        _callback.order = 10  # type: ignore
+        return _callback
     
     def fit(
         self, 
@@ -418,7 +433,7 @@ class LGBModel(TopRetModelBase):
                 "eval_set": [(valid['feature'].values, valid['label'].values.reshape(-1))],
                 "eval_names": ["valid"],
                 "eval_metric": self.metric,
-                "callbacks": [lgb.print_evaluation(period=50), self.early_stopping_for_ret(stop_round=self.ret_stop)]
+                "callbacks": [self.print_evaluatoin(period=50), self.early_stopping_for_ret(stop_round=self.ret_stop)]
             }
         self.model.fit(
             train['feature'].values, 
@@ -836,6 +851,7 @@ class FusionModel(TopRetModelBase):
         models: list,
         model_kwargs: list[dict],
         fusion: TopRetModelBase = None,
+        fusion_kwargs: dict = {},
         top = 0.1,
         ret_stop = 10,
         method: str = 'stacking',
@@ -844,9 +860,12 @@ class FusionModel(TopRetModelBase):
         self.top = top
         self.ret_stop = ret_stop
         self.fusion = fusion
+        self.fusion_class = fusion
+        self.fusion_kwargs = fusion_kwargs
         assert method != 'average' and fusion is not None,\
             "If fusion method is not simple average, a second-level model should be specified"
         self.models = models
+        self.model_class = models
         for kw in model_kwargs:
             kw.update({'ret': ret})
         self.model_kwargs = model_kwargs
@@ -858,6 +877,8 @@ class FusionModel(TopRetModelBase):
             
         assert len(self.models) == len(self.model_kwargs), \
             'The number of model and keyword arguments should match!'
+        
+        self.evals_result = None
 
     def _average_fit(self, train: pd.DataFrame, valid: pd.DataFrame, force_iter: int = None, **kwargs):
         models = [self.models[i](self.model_kwargs[i]) for i in range(len(self.models))]
@@ -874,7 +895,8 @@ class FusionModel(TopRetModelBase):
         kfold: int = None,
         **kwargs,
     ):
-        models = [self.models[i](**self.model_kwargs[i]) for i in range(len(self.models))]
+        models = [self.model_class[i](**self.model_kwargs[i]) for i in range(len(self.models))]
+        self.fusion = self.fusion_class(**self.fusion_kwargs)
         if kfold is None:
             kfold = len(models)
         self.models = []
@@ -905,22 +927,9 @@ class FusionModel(TopRetModelBase):
             pred_valid = pd.concat(pred_valids_, axis=1)
             pred_valid = pd.concat([pred_valid, valid['label']], axis=1, keys=['feature', 'label'])
             self.fusion.fit(pred_train, pred_valid, force_iter, **kwargs)
+            self.evals_result = self.fusion.evals_result
         else:
             self.fusion.fit(pred_train, force_iter, **kwargs)
-    
-    # def _blending_fit(
-    #     self,
-    #     train: pd.DataFrame,
-    #     valid: pd.DataFrame,
-    #     force_iter: int = None,
-    #     **kwargs
-    # ):
-    #     models = [self.models[i](self.model_kwargs[i]) for i in range(len(self.models))]
-    #     self.models = []
-    #     pred_trains = []
-    #     pred_valids = []
-    #     for model in models:
-    #         model.fit(train)
 
     def _voting_fit(self, train: pd.DataFrame, valid: pd.DataFrame, force_iter: int = None, **kwargs):
         raise NotImplementedError("Voting is still under development")
@@ -936,8 +945,13 @@ class FusionModel(TopRetModelBase):
         pred = pred.sum(axis=1) / sum(model_weight)
         return pred
     
-    def _stacking_predict(self, test: pd.DataFrame):
-        return self.fusion.predict(test)
+    def _stacking_predict(self, test: pd.DataFrame, kfold: int = None):
+        pred_test = []
+        for model in self.models:
+            pred_test.append(model.predict(test))
+        pred_test = pd.concat(pred_test, axis=1)
+        pred_test = pd.concat([pred_test, test['label']], axis=1, keys=['feature', 'label'])
+        return self.fusion.predict(pred_test)
     
     def _voting_predict(self, test: pd.DataFrame, model_weight: None):
         raise NotImplementedError("Voting is still under development")
