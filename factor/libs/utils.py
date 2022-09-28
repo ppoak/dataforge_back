@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -174,3 +175,14 @@ class PreProcessor:
         else:
             self.data = method(self.data.unstack(level=1 - self.level), **kwargs)
         return self
+
+def top_ret_loss(pred: torch.Tensor, label: torch.Tensor, top: 'float | int'):
+    if top < 1:
+        top = int(pred.shape[0] * top)
+    pred = pred.squeeze()
+    label = label.squeeze()
+    topk, topk_idx = torch.topk(pred, top)
+    mask = torch.zeros(top, pred.shape[0])
+    mask[torch.arange(top), topk_idx] = 1
+    
+    mask = torch.from_numpy(mask)

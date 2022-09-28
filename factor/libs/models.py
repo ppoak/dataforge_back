@@ -16,6 +16,19 @@ from sklearn.model_selection import KFold
 
 
 class TopRetModelBase:
+    """Top Return Model Base
+    =========================
+
+    three key parameters are return for each stock in the stock
+    universe in multi-index form; top ratio for stock selection;
+    and return stop step in this model
+
+    Data passed to the fit and predict interface should be multi-index
+    column labled and index labeled. For index, the level 0 is datetime,
+    the level 1 is stock id; for column, the level 0 should be feature 
+    set and lable set, level 1 should be concrete feature names and label name
+    """
+
     def __init__(self, ret, top, ret_stop):
         self.ret = ret
         self.top = top
@@ -31,6 +44,7 @@ class TopRetModelBase:
 
 
 class LinearModel(TopRetModelBase):
+    __doc__ = TopRetModelBase.__doc__
     def __init__(
         self, 
         ret,
@@ -43,6 +57,19 @@ class LinearModel(TopRetModelBase):
         optimizer_cls = torch.optim.AdamW,
         optimizer_kwargs = {"lr": 1e-2, "weight_decay": 1e-2, "betas": (0.9, 0.999)},
     ):
+        """Linear Model
+        ---------------
+
+        ret: pd.Series, return series for the stock universe
+        top: float, the top ratio for stock selection
+        in_feature: int, input features
+        out_feature: int, output features
+        epoch: int, the maximum epoch in training process
+        batch_size: int, how many samples are contrain in the batch
+        optimizer_cls: torch.optim.AdamW, the optimizer class, use 
+            implemented class in `torch.optim.AdamW` 
+        optimizer_kwargs: dict, the optimizer keyword arguments
+        """
         self.ret = ret
         self.top = top
         self.ret_stop = ret_stop
@@ -55,6 +82,14 @@ class LinearModel(TopRetModelBase):
         self.evals_result = None
         
     def fit(self, train: pd.DataFrame, valid: pd.DataFrame = None, force_iter: int = None, **kwargs):
+        """Fit interface in linear model
+        --------------------------------
+
+        train: pd.DataFrame, the train dataframe
+        valid: pd.DataFrame or None, the valid dataframe or not set
+        force_iter: int, this parameter can override `epoch`
+        kwargs: dict, the keyword arguments for compatibility        
+        """
         self.model = Linear(in_features=self.in_feature, out_features=self.out_feature)
         train_dataset = DataLoader(TorchDataset(train), batch_size=self.batch_size)
         self.optimizer_kwargs.update({"params": self.model.parameters()})
@@ -86,10 +121,16 @@ class LinearModel(TopRetModelBase):
                     print(f"[Early Stop] Top Return didn't imporve in {self.ret_stop} epoch, quitting")
                     print(f"[Early Stop] The best top return is {best_score} in epoch {best_iter}")
                     break
-        self.model.load_state_dict(model_param)
+        if valid is not None:
+            self.model.load_state_dict(model_param)
         return self
     
     def predict(self, test: pd.DataFrame):
+        """Predict interface for linear model
+        -------------------------------------
+
+        test: pd.DataFrame, test dataset for prediction
+        """
         self.model.eval()
         with torch.no_grad():
             return pd.Series(
@@ -110,6 +151,7 @@ class Linear(nn.Module):
 
 
 class DNNModel(TopRetModelBase):
+    __doc__ = TopRetModelBase.__doc__
     
     def __init__(
         self,
@@ -929,7 +971,7 @@ class FusionModel(TopRetModelBase):
             self.fusion.fit(pred_train, pred_valid, force_iter, **kwargs)
             self.evals_result = self.fusion.evals_result
         else:
-            self.fusion.fit(pred_train, force_iter, **kwargs)
+            self.fusion.fit(pred_train, None, force_iter, **kwargs)
 
     def _voting_fit(self, train: pd.DataFrame, valid: pd.DataFrame, force_iter: int = None, **kwargs):
         raise NotImplementedError("Voting is still under development")
