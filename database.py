@@ -1,19 +1,8 @@
 import re
-import time
-import random
-import datetime
-import requests
 import numpy as np
 import pandas as pd
-import akshare as ak
-from tqdm import tqdm
 import quantframe as qf
-from math import ceil
-from lxml import etree
 from pathlib import Path
-from bs4 import BeautifulSoup
-from urllib.parse import quote
-from joblib import Parallel, delayed
 
 
 def format_code(code, format_str = '{market}.{code}', upper: bool = True):
