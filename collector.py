@@ -8,140 +8,12 @@ import pandas as pd
 import akshare as ak
 from tqdm import tqdm
 from math import ceil
-from lxml import etree
 from bs4 import BeautifulSoup
 from urllib.parse import quote
-from joblib import Parallel, delayed
 from example.quant.database import (
     strip_stock_code,
     format_code
 )
-
-
-def chinese_holidays():
-    root = 'https://api.apihubs.cn/holiday/get'
-    complete = False
-    page = 1
-    holidays = []
-    while not complete:
-        params = f'?field=date&holiday_recess=1&cn=1&page={page}&size=366'
-        url = root + params
-        data = requests.get(url, verbose=False).get().json['data']
-        if data['page'] * data['size'] >= data['total']:
-            complete = True
-        days = pd.DataFrame(data['list']).date.astype('str')\
-            .astype('datetime64[ns]').to_list()
-        holidays += days
-        page += 1
-    return 
-
-
-class ProxyFetcher:
-
-    headers = {
-        "User-Agent": 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/30.0.1599.101',
-    }
-
-    @classmethod
-    def proxy_kaixin(cls, page_count: int = 10):
-        result = []
-
-        target_urls = [f"http://www.kxdaili.com/dailiip/2/{i}.html" for i in range(1, page_count + 1)]
-        for url in target_urls:
-            tree = etree.HTML(requests.get(url, headers=cls.headers).text)
-            for tr in tree.xpath("//table[@class='active']//tr")[1:]:
-                ip = "".join(tr.xpath('./td[1]/text()')).strip()
-                port = "".join(tr.xpath('./td[2]/text()')).strip()
-                result.append({"http": "http://" + "%s:%s" % (ip, port),
-                            "https": "https://" + "%s:%s" % (ip, port)})
-        return result
-
-    @classmethod
-    def proxy_kuaidaili(cls, page_count: int = 20):
-        result = []
-
-        url_pattern = [
-            'https://www.kuaidaili.com/free/inha/{}/',
-            'https://www.kuaidaili.com/free/intr/{}/'
-        ]
-        url_list = []
-        for page_index in range(1, page_count + 1):
-            for pattern in url_pattern:
-                url_list.append(pattern.format(page_index))
-                
-        for url in url_list:
-            tree = etree.HTML(requests.get(url, headers=cls.headers).text)
-            proxy_list = tree.xpath('.//table//tr')
-            time.sleep(1)
-            for tr in proxy_list[1:]:
-                result.append({
-                    "http": "http://" + ':'.join(tr.xpath('./td/text()')[0:2]),
-                    "https": "http://" + ':'.join(tr.xpath('./td/text()')[0:2])
-                })
-        return result
-
-    @classmethod
-    def proxy_ip3366(cls, page_count: int = 3):
-        result = []
-        urls = ['http://www.ip3366.net/free/?stype=1&page={}', "http://www.ip3366.net/free/?stype=2&page={}"]
-        url_list = []
-
-        for page in range(1, page_count + 1):
-            for url in urls:
-                url_list.append(url.format(page))
-
-        for url in url_list:
-            r = requests.get(url, headers=cls.headers)
-            proxies = re.findall(r'<td>(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})</td>[\s\S]*?<td>(\d+)</td>', r.text)
-            for proxy in proxies:
-                result.append({"http": "http://" + ":".join(proxy), "https": "http://" + ":".join(proxy)})
-        return result
-
-    @classmethod
-    def proxy_89ip(cls, page_count: int = 20):
-        result = []
-        urls = [f"https://www.89ip.cn/index_{i}.html" for i in range(1, page_count + 1)]
-        for url in urls:
-            r = requests.get(url, headers=cls.headers, timeout=10)
-            proxies = re.findall(
-                r'<td.*?>[\s\S]*?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})[\s\S]*?</td>[\s\S]*?<td.*?>[\s\S]*?(\d+)[\s\S]*?</td>',
-                r.text)
-            for proxy in proxies:
-                result.append({"http": "http://" + ":".join(proxy), "https": "http://" + ":".join(proxy)})
-        return result
-    
-    def _check(
-        self, 
-        proxy: dict, 
-        url: str = "http://www.baidu.com",
-        retry: float = 1, 
-        timeout: float = 1,
-        delay: float = 0
-    ) -> bool:
-        for t in range(retry):
-            try:
-                resp = requests.get(url, timeout=timeout, proxies=proxy)
-                resp.raise_for_status()
-                return True
-            except Exception as e:
-                time.sleep(delay)
-        return False
-    
-    def run(self):
-        all_funcs = filter(lambda x: not x.startswith('_') and x != "run" and x != "headers", dir(self))
-        proxies = Parallel(n_jobs=-1, backend='loky')(
-            delayed(getattr(self, func))() for func in all_funcs
-        )
-        proxies = sum(proxies, [])
-
-        results = np.array(Parallel(n_jobs=-1, backend='loky')(
-            delayed(self._check)(
-                proxy = proxy,
-            ) for proxy in proxies
-        ))
-        
-        df = pd.DataFrame(np.array(proxies)[results == True].tolist())
-        return df
 
 
 class AkShare:
@@ -726,4 +598,11 @@ class HotTopic:
             results.append(result)
         results = pd.concat(results, axis=1)
         return results
+
+
+if __name__ == '__main__':
+    from database import Database
+    
+    otherdb = Database("/home/kali/data/other")
+    asharedb = Database("/home/kali/data/ashare")
 

@@ -30,40 +30,6 @@ def strip_stock_code(code: str):
         '|\.?[Oo][Ff]\.?'
     return re.sub(code_pattern, '', code)
 
-def reduce_mem_usage(df: pd.DataFrame):
-    """iterate through all the columns of a dataframe and modify the data type
-    to reduce memory usage.
-    """
-    start_mem = df.memory_usage().sum()
-    print('Memory usage of dataframe is {:.2f} MB'.format(start_mem))
-    for col in df.columns:
-        col_type = df[col].dtype
-        if col_type != object:
-            c_min = df[col].min()
-            c_max = df[col].max()
-            if str(col_type)[:3] == 'int':
-                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
-                    df[col] = df[col].astype(np.int8)
-                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
-                    df[col] = df[col].astype(np.int16)
-                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
-                    df[col] = df[col].astype(np.int32)
-                elif c_min > np.iinfo(np.int64).min and c_max < np.iinfo(np.int64).max:
-                    df[col] = df[col].astype(np.int64)
-            else:
-                if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
-                    df[col] = df[col].astype(np.float16)
-                elif c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
-                    df[col] = df[col].astype(np.float32)
-                else:
-                    df[col] = df[col].astype(np.float64)
-        else:
-            df[col] = df[col].astype('category')
-    end_mem = df.memory_usage().sum()
-    print('Memory usage after optimization is: {:.2f} MB'.format(end_mem))
-    print('Decreased by {:.1f}%'.format(100 * (start_mem - end_mem) / start_mem))
-    return df
-
 
 class Database(qf.DatabaseBase):
 
@@ -71,9 +37,11 @@ class Database(qf.DatabaseBase):
         self, path: str,
         size_limit: int = 100 * 2 ** 20,
         item_limit: int = 1e10,
+        ram: float = 8 * 2 ** 30,
     ) -> None:
         self.size_limit = int(size_limit)
         self.item_limit = int(item_limit)
+        self.ram = ram
 
         path: Path = Path(path)
         self.path = path
@@ -99,8 +67,12 @@ class Database(qf.DatabaseBase):
                 s, e = file.stem.split('-')
                 config[table.name]["start"].append(s)
                 config[table.name]["end"].append(e)
-            config[table.name]["start"] = pd.to_datetime(config[table.name]["start"], errors='ignore').sort_values()
-            config[table.name]["end"] = pd.to_datetime(config[table.name]["end"], errors='ignore').sort_values()
+            config[table.name]["start"] = pd.to_datetime(
+                config[table.name]["start"], errors='ignore', format=r'%Y%m%d'
+            ).sort_values()
+            config[table.name]["end"] = pd.to_datetime(
+                config[table.name]["end"], errors='ignore', format=r'%Y%m%d'
+            ).sort_values()
         self.config = config
     
     def __str__(self) -> str:
@@ -152,19 +124,31 @@ class Database(qf.DatabaseBase):
         self._write_table(table_path, data)
     
     def _update(self, name: str, data: pd.DataFrame):
-        data = data.sort_index()
-
         table_path = self.path / name
-        codes = data.columns
-        with open(table_path / "codes.txt", "r") as f:
-            codes_old = f.readlines()
-        codes_old = pd.Index(codes_old)
-        if codes != codes_old:
-            data_old = pd.read_parquet(table_path)
-        data = pd.concat([data_old, data], axis=0, join='outer')
+        all_files = list(table_path.glob(r'[0-9]*-[0-9]*.parquet'))
+        batch = self.ram // self.size_limit - 1
 
-        self._write_col(table_path, codes)
-        self._write_table(table_path, data)
+        data = data.sort_index()
+        codes = data.columns
+
+        with open(table_path / "codes.txt", "r") as f:
+            codes_old = f.read().splitlines()
+        codes_old = pd.Index(codes_old)
+        for i in range(0, len(all_files), batch):
+            fs = all_files[i:i + batch]
+            if (codes != codes_old).any():
+                df = pd.read_parquet(fs)
+                for f in fs:
+                    f.unlink()
+                df = df.reindex(codes, axis=1)
+                self._write_table(table_path, df)
+            if len(fs) < batch:
+                df = pd.read_parquet(fs)
+                for f in fs:
+                    f.unlink()
+                df = pd.concat([df, data], axis=0)
+                df = df.loc[~df.index.duplicated(keep='last')]
+                self._write_table(table_path, df)
 
     def dump(
         self, 
@@ -183,8 +167,8 @@ class Database(qf.DatabaseBase):
                 
     def load(
         self,
-        code: str | list,
         field: str | list,
+        code: str | list = None,
         start: str | list = None,
         end: str = None,
         retdf: bool = False
@@ -238,6 +222,7 @@ class Database(qf.DatabaseBase):
                 d.name = n
                 df.append(d)
             return pd.concat(df, axis=1)
+
 
 if __name__ == "__main__":
     ashare_db = Database('/home/kali/data/ashare')
