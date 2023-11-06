@@ -10,7 +10,7 @@ from tqdm import tqdm
 from math import ceil
 from bs4 import BeautifulSoup
 from urllib.parse import quote
-from example.quant.database import (
+from .database import (
     strip_stock_code,
     format_code
 )
