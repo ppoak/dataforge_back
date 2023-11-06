@@ -2,11 +2,11 @@ import re
 import time
 import requests
 import pandas as pd
-import quantframe as qf
+import genforge as qf
 from joblib import Parallel, delayed
 
 
-class KaiXin(qf.RequestBase):
+class KaiXin(qf.Request):
 
     def __init__(self, page_count: int = 10):
         url = [f"http://www.kxdaili.com/dailiip/2/{i}.html" for i in range(1, page_count + 1)]
@@ -28,7 +28,7 @@ class KaiXin(qf.RequestBase):
         return pd.DataFrame(results)
 
 
-class KuaiDaili(qf.RequestBase):
+class KuaiDaili(qf.Request):
 
     def __init__(self, page_count: int = 20):
         url_pattern = [
@@ -55,7 +55,7 @@ class KuaiDaili(qf.RequestBase):
         return pd.DataFrame(results)
 
 
-class Ip3366(qf.RequestBase):
+class Ip3366(qf.Request):
 
     def __init__(self, page_count: int = 3):
         url = []
@@ -76,7 +76,7 @@ class Ip3366(qf.RequestBase):
         return pd.DataFrame(results)
 
 
-class Ip98(qf.RequestBase):
+class Ip98(qf.Request):
 
     def __init__(self, page_count: int = 20):
         super().__init__(url=[f"https://www.89ip.cn/index_{i}.html" for i in range(1, page_count + 1)])
@@ -95,7 +95,7 @@ class Ip98(qf.RequestBase):
         return pd.DataFrame(results)
 
 
-class Checker(qf.RequestBase):
+class Checker(qf.Request):
 
     def __init__(self, proxies: list[dict]):
         super().__init__(
@@ -145,37 +145,3 @@ class Checker(qf.RequestBase):
                 continue
             results.append(self.proxies[i])
         return pd.DataFrame(results)
-                
-
-
-if __name__ == "__main__":
-    from database import Database
-
-    print(f'[=] Loading other database and read proxy data ...')
-    otherdb = Database('/home/kali/data/other')
-    if otherdb.config.get('proxy'):
-        proxy = otherdb.load('proxy')
-        proxy = proxy['proxy']
-    else:
-        proxy = None
-
-    print(f'[=] Fetching kaixin proxy source ...')
-    kx = KaiXin()()
-    print(f'[=] Fetching kuaidaili proxy source ...')
-    kdl = KuaiDaili()(para=False)
-    print(f'[=] Fetching ip3366 proxy source ...')
-    ip3366 = Ip3366()()
-    print(f'[=] Fetching ip98 proxy source ...')
-    ip98 = Ip98()()
-
-    print(f'[=] Checking availability or proxies ...')
-    data = pd.concat([proxy, kx, kdl, ip3366, ip98], ignore_index=True)
-    data = data.to_dict(orient='records')
-    res = Checker(data)()
-
-    print(f'[=] Dumping data into other database table proxy ...')
-    res.index = res.index.map(lambda x: str(x).zfill(6))
-    otherdb = otherdb.dump(res, 'proxy')
-
-    print(f'[+] Update Success!')
-    print(otherdb)
