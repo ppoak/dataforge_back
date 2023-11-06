@@ -10,7 +10,7 @@ from tqdm import tqdm
 from math import ceil
 from bs4 import BeautifulSoup
 from urllib.parse import quote
-from .database import (
+from .tools import (
     strip_stock_code,
     format_code
 )
@@ -598,11 +598,4 @@ class HotTopic:
             results.append(result)
         results = pd.concat(results, axis=1)
         return results
-
-
-if __name__ == '__main__':
-    from database import Database
-    
-    otherdb = Database("/home/kali/data/other")
-    asharedb = Database("/home/kali/data/ashare")
 

@@ -1,78 +1,70 @@
-import re
-import numpy as np
+import datetime
 import pandas as pd
-import genforge as qf
+import genforge as gf
 from pathlib import Path
 
 
-def format_code(code, format_str = '{market}.{code}', upper: bool = True):
-    if len(c := code.split('.')) == 2:
-        dig_code = c.pop(0 if c[0].isdigit() else 1)
-        market_code = c[0]
-        if upper:
-            market_code = market_code.upper()
-        return format_str.format(market=market_code, code=dig_code)
-    elif len(code.split('.')) == 1:
-        sh_code_pat = '6\d{5}|9\d{5}'
-        sz_code_pat = '0\d{5}|2\d{5}|3\d{5}'
-        bj_code_pat = '8\d{5}|4\d{5}'
-        if re.match(sh_code_pat, code):
-            return format_str.format(code=code, market='sh' if not upper else 'SH')
-        if re.match(sz_code_pat, code):
-            return format_str.format(code=code, market='sz' if not upper else 'SZ')
-        if re.match(bj_code_pat, code):
-            return format_str.format(code=code, market='bj' if not upper else 'BJ')
-    else:
-        raise ValueError("Your input code is not unstood")
+class Asset(gf.Table):
 
-def strip_stock_code(code: str):
-    code_pattern = r'\.?[Ss][Zz]\.?|\.?[Ss][Hh]\.?|\.?[Bb][Jj]\.?'\
-        '|\.?[Oo][Ff]\.?'
-    return re.sub(code_pattern, '', code)
-
-
-class PanelTable(qf.Table):
-
-    def load(
-        self, 
-        field: str | list[str] | None = None,
-        start: str | pd.Timestamp | list[str] = None,
-        stop: str | pd.Timestamp = None,
-        code: str | list[str] = None,
-        date_name: str = 'date',
-        code_name: str = 'code',
+    def __init__(
+        self,
+        code: str | list[str],
+        uri: str | Path,
+        code_index: str = "order_book_id",
+        date_index: str = "date",
     ):
-        field = qf.parse_commastr(field)
-        filters = []
-        start = qf.parse_date(start)
-        stop = qf.parse_date(stop)
-        code = qf.parse_commastr(code)
+        self.path = uri
+        self.code = gf.parse_commastr(code)
+        self.data = None
+        self.code_index = code_index
+        self.date_index = date_index
+    
+    def read(
+        self, 
+        field: str | list = None,
+        start: str | list = None,
+        stop: str = None,
+    ) -> pd.Series | pd.DataFrame:
+        field = gf.parse_date(field or "close")
+        start = gf.parse_date(start or "2000-01-04")
+        stop = gf.parse_date(stop or datetime.datetime.today().strftime(r'%Y-%m-%d'))
+
         if isinstance(start, list) and stop is not None:
-            raise ValueError("When assigning a list of time, `stop` should be None")
-        elif isinstance(start, list):
-            filters.append([date_name, "in", start])
-        elif isinstance(start, pd.Timestamp):
-            filters.append([date_name, ">=", start])
-        if isinstance(stop, pd.Timestamp):
-            filters.append([date_name, "<=", stop])
-        if code is not None:
-            filters.append([code_name, "in", code])
-        return super().load(field, filters)
+            raise ValueError("If start is list, stop should be None")
+        
+        if (not isinstance(start, list) and self.data is not None and
+            pd.Index(field).isin(self.data.columns).all() and
+            self.data.index.min() < start and
+            self.data.index.max() > stop):
+            return self.data.loc[start:stop, field]
+        
+        elif (isinstance(start, list) and self.data is not None and
+              pd.Index(field).isin(self.data.columns).all() and
+              self.data.index.get_level_values(self.date_index).isin(start).all()):
+            return self.data.loc[start, field]
+        
+        elif not isinstance(start, list):
+            self.data = self.read(
+                field, [
+                    (self.date_index, ">=", gf.parse_date(start)), 
+                    (self.date_index, "<=", gf.parse_date(stop)), 
+                    (self.code_index, "=", self.code)
+                ]
+            )
+            return self.data
+        
+        elif isinstance(start, list) and stop is None:
+            self.data = self.read(
+                field, [
+                    (self.date_index, "in", gf.parse_date(start)),
+                    (self.code_index, "=", self.code),
+                ]
+            )
+            return self.data
+        
+        else:
+            raise ValueError("Invalid start, stop or field values")
 
 
-class FrameTable(qf.Table):
 
-    def load(
-        self, 
-        field: str | list[str] = None,
-        index: str | list[str] | pd.Timestamp = None,
-        name: str = "__index_level0__"
-    ):
-        field = qf.parse_commastr(field)
-        index = qf.parse_commastr(index)
-        filters = []
-        if isinstance(index, list):
-            filters.append([name, "in", index])
-        elif index is not None:
-            filters.append([name, "=", index])
-        return super().load(field, filters)
+
