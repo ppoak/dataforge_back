@@ -2,11 +2,11 @@ import re
 import time
 import requests
 import pandas as pd
-import genforge as qf
+import dataforge as forge
 from joblib import Parallel, delayed
 
 
-class KaiXin(qf.Request):
+class KaiXin(forge.Request):
 
     def __init__(self, page_count: int = 10):
         url = [f"http://www.kxdaili.com/dailiip/2/{i}.html" for i in range(1, page_count + 1)]
@@ -28,7 +28,7 @@ class KaiXin(qf.Request):
         return pd.DataFrame(results)
 
 
-class KuaiDaili(qf.Request):
+class KuaiDaili(forge.Request):
 
     def __init__(self, page_count: int = 20):
         url_pattern = [
@@ -55,7 +55,7 @@ class KuaiDaili(qf.Request):
         return pd.DataFrame(results)
 
 
-class Ip3366(qf.Request):
+class Ip3366(forge.Request):
 
     def __init__(self, page_count: int = 3):
         url = []
@@ -76,7 +76,7 @@ class Ip3366(qf.Request):
         return pd.DataFrame(results)
 
 
-class Ip98(qf.Request):
+class Ip98(forge.Request):
 
     def __init__(self, page_count: int = 20):
         super().__init__(url=[f"https://www.89ip.cn/index_{i}.html" for i in range(1, page_count + 1)])
@@ -95,7 +95,7 @@ class Ip98(qf.Request):
         return pd.DataFrame(results)
 
 
-class Checker(qf.Request):
+class Checker(forge.Request):
 
     def __init__(self, proxies: list[dict]):
         super().__init__(
