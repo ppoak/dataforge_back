@@ -5,8 +5,8 @@ import pandas as pd
 
 def parse_date(
     date: str | list = None,
-    default: str = '2000-01-04',
-    format_: str = r'%Y-%m-%d',
+    default: str = '20000104',
+    format_: str = r'%Y%m%d',
     errors: str = 'ignore'
 ) -> tuple:
     if not isinstance(date, list):

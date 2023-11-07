@@ -130,15 +130,15 @@ class AssetTable(Table):
     
     def read(
         self, 
-        code: str | list = None,
         field: str | list = None,
+        code: str | list = None,
         start: str | list = None,
         stop: str = None,
     ) -> pd.Series | pd.DataFrame:
         code = parse_commastr(code)
         field = parse_date(field or "close")
-        start = parse_date(start or "2000-01-04")
-        stop = parse_date(stop or datetime.datetime.today().strftime(r'%Y-%m-%d'))
+        start = parse_date(start or "20000104")
+        stop = parse_date(stop or datetime.datetime.today().strftime(r'%Y%m%d'))
 
         if isinstance(start, list) and stop is not None:
             raise ValueError("If start is list, stop should be None")

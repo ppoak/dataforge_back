@@ -1,13 +1,6 @@
-from .proxy import (
-    KaiXin,
-    KuaiDaili,
-    Ip3366,
-    Ip98,
-    Checker
-)
-
 from .database import (
-    Asset,
+    Table,
+    AssetTable
 )
 
 from .collector import (
@@ -16,17 +9,18 @@ from .collector import (
     StockUS,
     Cnki,
     WeiboSearch,
-    HotTopic
+    HotTopic,
+    KaiXin,
+    KuaiDaili,
+    Ip3366,
+    Ip98,
+    Checker,
 )
 
-from .database import (
-    format_code,
-    strip_stock_code,
-    Database,
-)
-
-from genforge.tools import (
+from .tools import (
     parse_commastr,
     parse_date,
     reduce_mem_usage,
+    format_code,
+    strip_stock_code,
 )
