@@ -104,10 +104,14 @@ class AssetTable(Table):
     def __init__(
         self,
         uri: str | Path,
+        date_index: str = 'date',
+        code_index: str = 'order_book_id',
     ):
         spliter = lambda x: x[1].year * 100 + x[1].month
         namer = lambda x: x.index.get_level_values(1)[0].strftime(r'%Y%m')
         super().__init__(uri, spliter, namer)
+        self.date_index = date_index
+        self.code_index = code_index
     
     def read(
         self, 
