@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setup(
-    name = "quantcopilot",
+    name = "dataforge",
     packages = find_packages(),
     author = "ppoak",
     author_email = "ppoak@foxmail.com",
@@ -13,8 +13,8 @@ setup(
     long_description = long_description,
     long_description_content_type = "text/markdown",
     keywords = ['quant', 'framework', 'finance'],
-    url = "https://github.com/ppoak/quantcopilot",
-    version = '0.0.1',
+    url = "https://github.com/ppoak/dataforge",
+    version = '0.0.2',
     install_requires = [
         'pandas',
         'numpy',
