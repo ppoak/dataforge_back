@@ -11,10 +11,15 @@ class Table:
         self,
         uri: str | Path,
         spliter: str | list | dict | pd.Series | Callable | None = None,
+        namer: str | list | dict | pd.Series | Callable | None = None,
     ):
         self.path = Path(uri).expanduser().resolve()
         self.name = self.path.stem
+        if not ((spliter is None and namer is None) or 
+                (spliter is not None and namer is not None)):
+            raise ValueError('spliter and namer must be both None or both not None')
         self.spliter = spliter
+        self.namer = namer
     
     @property
     def fragments(self):
@@ -41,9 +46,11 @@ class Table:
         fragment: list | str = None,
     ):
         fragment = fragment or self.fragments
+        fragment = [fragment] if not isinstance(fragment, list) else fragment
+        fragment = [self.path.joinpath(frag).with_suffix('.parquet') for frag in fragment]
         return pd.read_parquet(fragment, engine='pyarrow')
     
-    def write(
+    def update(
         self,
         df: pd.DataFrame,
         fragment: str = None,
@@ -52,50 +59,26 @@ class Table:
         df = pd.concat([self._read_fragment(fragment), df], axis=0)
         df = df.loc[~df.index.duplicated(keep='last')].sort_index()
         if self.spliter:
-            spilter = self.spliter
-            df.groupby(spilter, as_index=True).apply(
-                lambda x: x.droplevel(0).to_parquet(
-                    f"{self.path.joinpath(x.index.get_level_values(0)[0])}.parquet"
-            ))
-        else:
-            df.to_paruqet(self.path.joinpath(fragment).with_suffix('.parquet'))
-    
-    def update(
-        self,
-        value: pd.Series | list | str,
-        index: pd.Index | list | str = None,
-        column: pd.Index | list | str = None,
-        fragment: list | str = None,
-    ):
-        fragment = fragment or self.fragments
-        df = self._read_fragment(fragment)
-        index = index or df.index
-        column = column or df.columns
-        df.loc[index, column] = value
-        if self.spliter:
-            spilter = self.spliter
-            df.groupby(spilter, as_index=True).apply(
-                lambda x: x.droplevel(0).to_parquet(
-                    f"{self.path.joinpath(x.index.get_level_values(0)[0])}.parquet"
+            df.groupby(self.spliter).apply(
+                lambda x: x.to_parquet(
+                    f"{self.path.joinpath(self.namer(x))}.parquet"
             ))
         else:
             df.to_parquet(self.path.joinpath(fragment).with_suffix('.parquet'))
     
-    def drop(
+    def write(
         self,
-        index: pd.Index | list | str = None,
-        column: pd.Index | list | str = None,
-        level: int | list | str = None,
-        fragment: list | str = None,
+        df: pd.DataFrame,
+        fragment: str = None,
     ):
-        fragment = fragment or self.fragments
-        df = self._read_fragment(fragment)
-        df = df.drop(index=index, columns=column, level=level)
+        fragment = fragment or self.name
+        if not isinstance(fragment, str):
+            raise ValueError("fragment should be in string format")
         if self.spliter:
-            spilter = self.spliter
-            df.groupby(spilter, as_index=True).apply(
-                lambda x: x.droplevel(0).to_parquet(
-                    f"{self.path.joinpath(x.index.get_level_values(0)[0])}.parquet"
+            df.loc[~df.index.duplicated(keep='last')].sort_index()\
+            .groupby(self.spliter).apply(
+                lambda x: x.to_parquet(
+                    f"{self.path.joinpath(self.namer(x))}.parquet"
             ))
         else:
             df.to_parquet(self.path.joinpath(fragment).with_suffix('.parquet'))
@@ -105,8 +88,9 @@ class Table:
         fragment: str | list = None,
     ):
         fragment = fragment or self.fragments
+        fragment = [fragment] if not isinstance(fragment, list) else fragment
         for frag in fragment:
-            frag.unlink()
+            (self.path.joinpath(frag).with_suffix('.parquet')).unlink()
     
     def __str__(self) -> str:
         return f'Table at <{self.path.absolute()}>'
@@ -120,13 +104,10 @@ class AssetTable(Table):
     def __init__(
         self,
         uri: str | Path,
-        code_index: str = "order_book_id",
-        date_index: str = "date",
     ):
-        spliter = lambda x: x.year * 100 + x.month
-        super().__init__(uri, spliter)
-        self.code_index = code_index
-        self.date_index = date_index
+        spliter = lambda x: x[1].year * 100 + x[1].month
+        namer = lambda x: x.index.get_level_values(1)[0].strftime(r'%Y%m')
+        super().__init__(uri, spliter, namer)
     
     def read(
         self, 
@@ -161,13 +142,23 @@ class AssetTable(Table):
         else:
             raise ValueError("Invalid start, stop or field values")
     
-    def write(
+    def update(
         self, df: pd.DataFrame, 
     ):
         fragment = sorted(self.fragments)[-1]
-        super().write(df, fragment)
+        super().update(df, fragment)
         
 
-class Proxy(Table):
+class FrameTable(Table):
 
-    pass
+    def read(
+        self,
+        column: str | list = None,
+        index: str | list = None,
+        index_name: str = 'order_book_id',
+    ):
+        filters = None
+        if index is not None:
+            filters = [(index_name, "in", parse_commastr(index))]
+        super().read(parse_commastr(column), filters)
+
