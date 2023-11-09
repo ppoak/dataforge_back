@@ -104,11 +104,13 @@ class AssetTable(Table):
     def __init__(
         self,
         uri: str | Path,
+        spliter: str | list | dict | pd.Series | Callable | None = None,
+        namer: str | list | dict | pd.Series | Callable | None = None,
         date_index: str = 'date',
         code_index: str = 'order_book_id',
     ):
-        spliter = lambda x: x[1].year * 100 + x[1].month
-        namer = lambda x: x.index.get_level_values(1)[0].strftime(r'%Y%m')
+        spliter = spliter or (lambda x: x[1].year * 100 + x[1].month)
+        namer = namer or (lambda x: x.index.get_level_values(1)[0].strftime(r'%Y%m'))
         super().__init__(uri, spliter, namer)
         self.date_index = date_index
         self.code_index = code_index
@@ -119,9 +121,11 @@ class AssetTable(Table):
         code: str | list = None,
         start: str | list = None,
         stop: str = None,
+        filters: list[list[tuple]] = None,
     ) -> pd.Series | pd.DataFrame:
         code = parse_commastr(code)
-        field = parse_date(field or "close")
+        field = parse_commastr(field)
+        filters = filters or []
         start = parse_date(start or "20000104")
         stop = parse_date(stop or datetime.datetime.today().strftime(r'%Y%m%d'))
 
@@ -129,7 +133,7 @@ class AssetTable(Table):
             raise ValueError("If start is list, stop should be None")
                 
         elif not isinstance(start, list):
-            filters = [
+            filters += [
                 (self.date_index, ">=", parse_date(start)), 
                 (self.date_index, "<=", parse_date(stop)), 
             ]
@@ -138,7 +142,7 @@ class AssetTable(Table):
             return super().read(field, filters)
         
         elif isinstance(start, list) and stop is None:
-            filters = [(self.date_index, "in", parse_date(start))]
+            filters += [(self.date_index, "in", parse_date(start))]
             if code is not None:
                 filters.append((self.code_index, "in", code))
             return super().read(field, filters)
