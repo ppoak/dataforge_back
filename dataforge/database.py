@@ -164,5 +164,5 @@ class FrameTable(Table):
         filters = None
         if index is not None:
             filters = [(index_name, "in", parse_commastr(index))]
-        super().read(parse_commastr(column), filters)
+        return super().read(parse_commastr(column), filters)
 
