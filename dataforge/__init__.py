@@ -6,6 +6,7 @@ from .database import (
 
 from .collector import (
     AkShare,
+    Request,
     Em,
     StockUS,
     Cnki,

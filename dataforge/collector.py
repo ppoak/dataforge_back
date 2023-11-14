@@ -97,7 +97,7 @@ class Request:
         return self
 
     def callback(self, *args, **kwargs):
-        raise NotImplementedError
+        return self.responses
 
     @property
     def json(self):
@@ -798,9 +798,9 @@ class Ip98(Request):
 
 class Checker(Request):
 
-    def __init__(self, proxies: list[dict]):
+    def __init__(self, proxies: list[dict], url: str = "http://httpbin.org/ip"):
         super().__init__(
-            url = ["http://httpbin.org/ip"] * len(proxies),
+            url = [url] * len(proxies),
             proxies = proxies,
             timeout = 2.0,
             retry = 1,
