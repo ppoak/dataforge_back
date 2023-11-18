@@ -1,4 +1,5 @@
 import datetime
+import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Callable
@@ -138,7 +139,13 @@ class Table:
         ], axis=1).to_parquet(
             (self.path / self.namer(x)).with_suffix('.parquet')
         ))
-
+        related_fragment = df.groupby(self.spliter).apply(lambda x: self.namer(x))
+        columns = df.columns if isinstance(df, pd.DataFrame) else [df.name]
+        for frag in set(related_fragment.to_list()) - set(self.fragments):
+            d = self._read_fragment(frag)
+            d[columns] = np.nan
+            d.to_parquet(self.path.joinpath(frag).with_suffix('.parquet'))
+        
     def __str__(self) -> str:
         return f'Table at <{self.path.absolute()}>'
     
