@@ -13,6 +13,14 @@ class Table:
         spliter: str | list | dict | pd.Series | Callable | None = None,
         namer: str | list | dict | pd.Series | Callable | None = None,
     ):
+        """Create Table Class
+        ======================
+        uri: str or Path, the target path to the database
+        spliter: str, list, dict, Series or Callable, the split function to divide 
+            a dataframe into several partitions
+        namer: str, list, dict, Seris, Callable, the naming function to name a
+            specific dataframe partition
+        """
         self.path = Path(uri).expanduser().resolve()
         self.name = self.path.stem
         if not ((spliter is None and namer is None) or 
@@ -33,6 +41,11 @@ class Table:
         columns: str | list[str] | None = None,
         filters: list[list[tuple]] = None,
     ):
+        """Reading Data
+        ===============
+        columns: str, list[str], the columns to be read
+        filters: filter format can be referred to `pd.read_parquet`
+        """
         df = pd.read_parquet(
             self.path, 
             engine = 'pyarrow', 
@@ -45,6 +58,10 @@ class Table:
         self,
         fragment: list | str = None,
     ):
+        """Read a given fragment
+        ========================
+        fragment: str or list, fragment to be provided
+        """
         fragment = fragment or self.fragments
         fragment = [fragment] if not isinstance(fragment, list) else fragment
         fragment = [self.path.joinpath(frag).with_suffix('.parquet') for frag in fragment]
@@ -55,6 +72,12 @@ class Table:
         df: pd.DataFrame,
         fragment: str = None,
     ):
+        """Update the database
+        =======================
+        df: DataFrame, the dataframe to be saved into the database, 
+            note the columns should be aligned,
+        fragment: str, to specify which fragment to save the df
+        """
         fragment = fragment or self.name
         df = pd.concat([self._read_fragment(fragment), df], axis=0)
         df = df.loc[~df.index.duplicated(keep='last')].sort_index()
@@ -71,6 +94,11 @@ class Table:
         df: pd.DataFrame,
         fragment: str = None,
     ):
+        """Writing data
+        ================
+        df: DataFrame, dataframe to be written,
+        fragment: str, the specific fragment to be written
+        """
         fragment = fragment or self.name
         if not isinstance(fragment, str):
             raise ValueError("fragment should be in string format")
@@ -87,11 +115,30 @@ class Table:
         self,
         fragment: str | list = None,
     ):
+        """Remove fragment
+        ===================
+        fragment: str or list, specify which fragment(s) to be removed
+        """
         fragment = fragment or self.fragments
         fragment = [fragment] if not isinstance(fragment, list) else fragment
         for frag in fragment:
             (self.path.joinpath(frag).with_suffix('.parquet')).unlink()
-    
+
+    def add(
+        self,
+        df: pd.Series | pd.DataFrame
+    ):
+        """Add a column
+        ================
+        df: DataFrame, data in extra column
+        """
+        df.groupby(self.spliter).apply(
+            lambda x: pd.concat([
+                self._read_fragment(self.namer(x)), x
+        ], axis=1).to_parquet(
+            (self.path / self.namer(x)).with_suffix('.parquet')
+        ))
+
     def __str__(self) -> str:
         return f'Table at <{self.path.absolute()}>'
     
