@@ -72,6 +72,28 @@ class Table:
         fragment = [(self.path / frag).with_suffix('.parquet') for frag in fragment]
         return pd.read_parquet(fragment, engine='pyarrow')
     
+    def _write_fragment(
+        self,
+        df: pd.DataFrame,
+        fragment: str = None,
+    ):
+        """Writing data
+        ================
+        df: DataFrame, dataframe to be written,
+        fragment: str, the specific fragment to be written
+        """
+        fragment = fragment or self.name
+        df = df.loc[~df.index.duplicated(keep='last')].sort_index()
+        if not isinstance(fragment, str):
+            raise ValueError("fragment should be in string format")
+        if self.spliter:
+            df.groupby(self.spliter).apply(
+                lambda x: x.to_parquet(
+                    f"{self.path / self.namer(x)}.parquet"
+            ))
+        else:
+            df.to_parquet((self.path / fragment).with_suffix('.parquet'))
+    
     def update(
         self,
         df: pd.DataFrame,
@@ -85,37 +107,8 @@ class Table:
         """
         fragment = fragment or self.name
         df = pd.concat([self._read_fragment(fragment), df], axis=0)
-        df = df.loc[~df.index.duplicated(keep='last')].sort_index()
-        if self.spliter:
-            df.groupby(self.spliter).apply(
-                lambda x: x.to_parquet(
-                    f"{self.path / self.namer(x)}.parquet"
-            ))
-        else:
-            df.to_parquet((self.path / fragment).with_suffix('.parquet'))
+        self._write_fragment(df, fragment)
     
-    def write(
-        self,
-        df: pd.DataFrame,
-        fragment: str = None,
-    ):
-        """Writing data
-        ================
-        df: DataFrame, dataframe to be written,
-        fragment: str, the specific fragment to be written
-        """
-        fragment = fragment or self.name
-        if not isinstance(fragment, str):
-            raise ValueError("fragment should be in string format")
-        if self.spliter:
-            df.loc[~df.index.duplicated(keep='last')].sort_index()\
-            .groupby(self.spliter).apply(
-                lambda x: x.to_parquet(
-                    f"{self.path / self.namer(x)}.parquet"
-            ))
-        else:
-            df.to_parquet((self.path / fragment).with_suffix('.parquet'))
-
     def remove(
         self,
         fragment: str | list = None,
@@ -259,13 +252,11 @@ class DiffTable(AssetTable):
     def update(
         self, df: pd.DataFrame,
     ):
+        fragment = self.fragments[-1]
+        df = pd.concat([self._read_fragment(fragment), df], axis=0)
         df = self._diff(df)
-        super().update(df)
+        self._write_fragment(df, fragment)
     
-    def write(self, df: pd.DataFrame, fragment: str = None):
-        df = self._diff(df)
-        super().write(df, fragment)
-        
     def add(self, df: pd.DataFrame):
         df = self._diff(df)
         super().add(df)
