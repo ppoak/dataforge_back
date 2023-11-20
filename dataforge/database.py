@@ -32,7 +32,11 @@ class Table:
     
     @property
     def fragments(self):
-        return [f.stem for f in list(self.path.glob('**/*.parquet'))]
+        return sorted([f.stem for f in list(self.path.glob('**/*.parquet'))])
+    
+    @property
+    def columns(self):
+        return self._read_fragment(self.fragments).columns
 
     def create(self):
         self.path.mkdir(parents=True, exist_ok=True)
@@ -65,7 +69,7 @@ class Table:
         """
         fragment = fragment or self.fragments
         fragment = [fragment] if not isinstance(fragment, list) else fragment
-        fragment = [self.path.joinpath(frag).with_suffix('.parquet') for frag in fragment]
+        fragment = [(self.path / frag).with_suffix('.parquet') for frag in fragment]
         return pd.read_parquet(fragment, engine='pyarrow')
     
     def update(
@@ -85,10 +89,10 @@ class Table:
         if self.spliter:
             df.groupby(self.spliter).apply(
                 lambda x: x.to_parquet(
-                    f"{self.path.joinpath(self.namer(x))}.parquet"
+                    f"{self.path / self.namer(x)}.parquet"
             ))
         else:
-            df.to_parquet(self.path.joinpath(fragment).with_suffix('.parquet'))
+            df.to_parquet((self.path / fragment).with_suffix('.parquet'))
     
     def write(
         self,
@@ -107,10 +111,10 @@ class Table:
             df.loc[~df.index.duplicated(keep='last')].sort_index()\
             .groupby(self.spliter).apply(
                 lambda x: x.to_parquet(
-                    f"{self.path.joinpath(self.namer(x))}.parquet"
+                    f"{self.path / self.namer(x)}.parquet"
             ))
         else:
-            df.to_parquet(self.path.joinpath(fragment).with_suffix('.parquet'))
+            df.to_parquet((self.path / fragment).with_suffix('.parquet'))
 
     def remove(
         self,
@@ -123,7 +127,7 @@ class Table:
         fragment = fragment or self.fragments
         fragment = [fragment] if not isinstance(fragment, list) else fragment
         for frag in fragment:
-            (self.path.joinpath(frag).with_suffix('.parquet')).unlink()
+            ((self.path / frag).with_suffix('.parquet')).unlink()
 
     def add(
         self,
@@ -133,18 +137,24 @@ class Table:
         ================
         df: DataFrame, data in extra column
         """
-        df.groupby(self.spliter).apply(
-            lambda x: pd.concat([
-                self._read_fragment(self.namer(x)), x
-        ], axis=1).to_parquet(
-            (self.path / self.namer(x)).with_suffix('.parquet')
-        ))
-        related_fragment = df.groupby(self.spliter).apply(lambda x: self.namer(x))
-        columns = df.columns if isinstance(df, pd.DataFrame) else [df.name]
-        for frag in set(related_fragment.to_list()) - set(self.fragments):
-            d = self._read_fragment(frag)
-            d[columns] = np.nan
-            d.to_parquet(self.path.joinpath(frag).with_suffix('.parquet'))
+        if self.spliter:
+            df.groupby(self.spliter).apply(
+                lambda x: pd.concat([
+                    self._read_fragment(self.namer(x)), x
+            ], axis=1).to_parquet(
+                (self.path / self.namer(x)).with_suffix('.parquet')
+            ))
+            related_fragment = df.groupby(self.spliter).apply(lambda x: self.namer(x))
+            columns = df.columns if isinstance(df, pd.DataFrame) else [df.name]
+            for frag in set(related_fragment.to_list()) - set(self.fragments):
+                d = self._read_fragment(frag)
+                d[columns] = np.nan
+                d.to_parquet((self.path / frag).with_suffix('.parquet'))
+        else:
+            for frag in self.fragments:
+                pd.concat([pd._read_fragment(frag), df], axis=1).to_parquet(
+                    (self.path / frag).with_suffix('.parquet')
+                )
         
     def __str__(self) -> str:
         return f'Table at <{self.path.absolute()}>'
@@ -207,7 +217,7 @@ class AssetTable(Table):
     def update(
         self, df: pd.DataFrame, 
     ):
-        fragment = sorted(self.fragments)[-1]
+        fragment = self.fragments[-1]
         super().update(df, fragment)
         
 
@@ -224,3 +234,38 @@ class FrameTable(Table):
             filters = [(index_name, "in", parse_commastr(index))]
         return super().read(parse_commastr(column), filters)
 
+
+class DiffTable(AssetTable):
+
+    def __init__(
+        self,
+        uri: str | Path,
+        spliter: str | list | dict | pd.Series | Callable | None = None,
+        namer: str | list | dict | pd.Series | Callable | None = None,
+        date_index: str = 'date',
+        code_index: str = 'order_book_id',
+    ):
+        spliter = spliter or (lambda x: x[1].year)
+        namer = namer or (lambda x: x.index.get_level_values(1)[0].strftime(r'%Y'))
+        super().__init__(uri, spliter, namer, date_index, code_index)
+
+    def _diff(self, df: pd.DataFrame):
+        df = df.copy()
+        diff = df.groupby(self.code_index).apply(lambda x: x.diff())
+        df = df.loc[(diff != 0).any(axis=1).values]
+        df = df.loc[~df.index.duplicated(keep='last')].sort_index()
+        return df
+    
+    def update(
+        self, df: pd.DataFrame,
+    ):
+        df = self._diff(df)
+        super().update(df)
+    
+    def write(self, df: pd.DataFrame, fragment: str = None):
+        df = self._diff(df)
+        super().write(df, fragment)
+        
+    def add(self, df: pd.DataFrame):
+        df = self._diff(df)
+        super().add(df)

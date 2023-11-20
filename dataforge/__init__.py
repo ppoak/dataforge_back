@@ -1,7 +1,8 @@
 from .database import (
     Table,
     AssetTable,
-    FrameTable
+    FrameTable,
+    DiffTable,
 )
 
 from .collector import (
