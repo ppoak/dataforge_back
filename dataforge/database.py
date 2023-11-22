@@ -36,7 +36,7 @@ class Table:
     
     @property
     def columns(self):
-        return self._read_fragment(self.fragments).columns
+        return self._read_fragment(self.fragments[-1]).columns
 
     def create(self):
         self.path.mkdir(parents=True, exist_ok=True)
