@@ -126,7 +126,7 @@ class Table:
         self,
         df: pd.Series | pd.DataFrame
     ):
-        """Add a column
+        """Add (a) column(s)
         ================
         df: DataFrame, data in extra column
         """
@@ -148,6 +148,20 @@ class Table:
                 pd.concat([pd._read_fragment(frag), df], axis=1).to_parquet(
                     (self.path / frag).with_suffix('.parquet')
                 )
+    
+    def sub(
+        self,
+        column: str | list
+    ):
+        """Delet (a) column(s)
+        ================
+        column: str or list, column name(s)
+        """
+        column = parse_commastr(column)
+        for frag in self.fragments:
+            df = self._read_fragment(frag)
+            df = df.drop(column, axis=1)
+            self._write_fragment(df, frag)
         
     def __str__(self) -> str:
         return f'Table at <{self.path.absolute()}>'
