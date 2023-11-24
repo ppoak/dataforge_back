@@ -51,6 +51,7 @@ class Indicator(bt.Indicator):
         datetime = datetime or self.data.datetime.date(0)
         print(f'[{datetime}]: {text}')    
 
+
 class Analyzer(bt.Analyzer):
 
     def log(self, text: str, datetime: pd.Timestamp = None):
@@ -58,12 +59,14 @@ class Analyzer(bt.Analyzer):
         datetime = datetime or self.data.datetime.date(0)
         print(f'[{datetime}]: {text}')
 
+
 class Observer(bt.Observer):
 
     def log(self, text: str, datetime: pd.Timestamp = None):
         """Logging function"""
         datetime = datetime or self.data.datetime.date(0)
         print(f'[{datetime}]: {text}')
+
 
 class OrderTable(Analyzer):
 
@@ -89,6 +92,80 @@ class OrderTable(Analyzer):
         self.rets = pd.DataFrame(self.orders, columns=['datetime', 'asset', 'size', 'price', 'direction'])
         self.rets = self.rets.set_index('datetime')
         return self.orders
+
+
+class Relocator:
+
+    def __init__(
+        self,
+        weight: pd.DataFrame,
+        price: pd.DataFrame,
+        code_index: str = 'order_book_id',
+        date_index: str = 'date_index',
+    ):
+        if isinstance(weight, pd.DataFrame) and isinstance(weight.index, pd.DatetimeIndex):
+            self.weight = weight.stack()
+            self.weight.index.names = [code_index, date_index]
+        elif isinstance(weight, pd.Series) and isinstance(weight.index, pd.MultiIndex):
+            self.weight = weight
+        else:
+            raise ValueError("Malformed format of weight")
+
+        if isinstance(price, pd.DataFrame) and isinstance(price.index, pd.DatetimeIndex):
+            self.price = price.stack()
+        elif isinstance(price, pd.Series) and isinstance(price.index, pd.MultiIndex):
+            self.price = price
+        else:
+            raise ValueError("Malformed format of price")
+
+        self.weight = self.weight.groupby(level=self.date_index, 
+            as_index=False).apply(lambda x: x / x.sum())
+        self.code_index = code_index
+        self.date_index = date_index
+
+    def turnover(self, side: str = 'both'):
+        weight = self.weight.reindex(pd.MultiIndex.from_product([
+            self.weight.index.get_level_values(self.code_index).unique(), 
+            self.weight.index.get_level_values(self.date_index).unique()
+        ], names = [self.code_index, self.date_index])).fillna(0)
+
+        preweight = weight.groupby(level=self.code_index).shift(1).fillna(0)
+        delta = weight - preweight
+        if side == 'both':
+            return delta.groupby(level=self.date_index).apply(lambda x: x.abs().sum())
+        elif side == 'buy':
+            return delta.groupby(level=self.date_index).apply(lambda x: x[x > 0].abs().sum())
+        elif side == 'sell':
+            return delta.groupby(level=self.date_index).apply(lambda x: x[x < 0].abs().sum())
+    
+    def profit(
+        self, 
+        ret: pd.Series, 
+        portfolio: pd.Series = None,
+    ):
+        if portfolio is not None:
+            grouper = [portfolio, pd.Grouper(level=0)]
+        else:
+            grouper = pd.Grouper(level=0) 
+        
+        return weight.groupby(grouper).apply(lambda x: 
+            (ret.loc[x.index] * x).sum() / x.sum())
+
+    def netvalue(self):    
+        relocate_date = weight.index.get_level_values(self.date_index).unique()
+        datetime_index = price.index.get_level_values(self.date_index).unique()
+        lrd = relocate_date[0]
+        lnet = (price.loc[d] * self.weight.loc[lrd]).sum()
+        lcnet = 1
+        net = pd.Series(np.ones(datetime_index.size), index=datetime_index)
+        for d in datetime_index[1:]:
+            cnet = (price.loc[d] * self.weight.loc[lrd]).sum() / lnet * lcnet
+            lrd = relocate_date[relocate_date <= d][-1]
+            if d == lrd:
+                lcnet = cnet
+                lnet = (price.loc[d] * self.weight.loc[lrd]).sum()
+            net.loc[d] = cnet
+        return net
 
 
 class BackTrader:
