@@ -27,3 +27,12 @@ from .tools import (
     format_code,
     strip_stock_code,
 )
+
+from .backtest import (
+    BackTrader,
+    Strategy,
+    Indicator,
+    Analyzer,
+    Observer,
+    OrderTable,
+)
