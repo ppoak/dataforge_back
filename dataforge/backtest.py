@@ -96,35 +96,35 @@ class OrderTable(Analyzer):
 
 class Relocator:
 
+    def _format(self, data: pd.DataFrame):
+        if isinstance(data.index, pd.MultiIndex):
+            return data
+        elif isinstance(data, pd.DataFrame) and isinstance(data.index, pd.DatetimeIndex):
+            return data.stack()
+        else:
+            raise ValueError("Malformed format of data")
+
     def __init__(
         self,
-        weight: pd.DataFrame,
         price: pd.DataFrame,
         code_index: str = 'order_book_id',
         date_index: str = 'date_index',
+        buy_column: str = "open",
+        sell_column: str = "close",
+        commision: float = 0.005,
     ):
-        if isinstance(weight, pd.DataFrame) and isinstance(weight.index, pd.DatetimeIndex):
-            self.weight = weight.stack()
-            self.weight.index.names = [code_index, date_index]
-        elif isinstance(weight, pd.Series) and isinstance(weight.index, pd.MultiIndex):
-            self.weight = weight
-        else:
-            raise ValueError("Malformed format of weight")
-
-        if isinstance(price, pd.DataFrame) and isinstance(price.index, pd.DatetimeIndex):
-            self.price = price.stack()
-        elif isinstance(price, pd.Series) and isinstance(price.index, pd.MultiIndex):
-            self.price = price
-        else:
-            raise ValueError("Malformed format of price")
-
-        self.weight = self.weight.groupby(level=self.date_index, 
-            as_index=False).apply(lambda x: x / x.sum())
+        self.price = self._format(price)
+        self.buy_price = self.price[buy_column] if isinstance(self.price, pd.DataFrame) else self.price
+        self.sell_price = self.price[sell_column] if isinstance(self.price, pd.DataFrame) else self.price
         self.code_index = code_index
         self.date_index = date_index
 
-    def turnover(self, side: str = 'both'):
-        weight = self.weight.reindex(pd.MultiIndex.from_product([
+    def turnover(
+        self, 
+        weight: pd.DataFrame | pd.Series, 
+        side: str = 'both'
+    ):
+        weight = weight.reindex(pd.MultiIndex.from_product([
             self.weight.index.get_level_values(self.code_index).unique(), 
             self.weight.index.get_level_values(self.date_index).unique()
         ], names = [self.code_index, self.date_index])).fillna(0)
@@ -140,22 +140,25 @@ class Relocator:
     
     def profit(
         self, 
-        ret: pd.Series, 
-        portfolio: pd.Series = None,
+        weight: pd.DataFrame | pd.Series, 
     ):
-        if portfolio is not None:
-            grouper = [portfolio, pd.Grouper(level=0)]
-        else:
-            grouper = pd.Grouper(level=0) 
-        
-        return weight.groupby(grouper).apply(lambda x: 
-            (ret.loc[x.index] * x).sum() / x.sum())
+        weight = self._format(weight)
+        comission = self.turnover(weight) * self.commision
+        buy_price = self.buy_price.loc[weight.index].grouby(level=self.code_index).shift(1)
+        sell_price = self.sell_price.loc[weight.index]
+        ret = (sell_price - buy_price) / buy_price
+        return weight.groupby(level=date_index).apply(lambda x: 
+            (ret.loc[x.index] * x).sum() - commision.loc[x.index])
 
-    def netvalue(self):    
+    def netvalue(
+        self,
+        weight: pd.DataFrame | pd.Series,    
+    ):
+        weight = self._format(weight)
         relocate_date = weight.index.get_level_values(self.date_index).unique()
-        datetime_index = price.index.get_level_values(self.date_index).unique()
+        datetime_index = self.price.index.get_level_values(self.date_index).unique()
         lrd = relocate_date[0]
-        lnet = (price.loc[d] * self.weight.loc[lrd]).sum()
+        lnet = (self.price.loc[d] * self.weight.loc[lrd]).sum()
         lcnet = 1
         net = pd.Series(np.ones(datetime_index.size), index=datetime_index)
         for d in datetime_index[1:]:
