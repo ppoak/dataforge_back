@@ -30,6 +30,7 @@ from .tools import (
 
 from .backtest import (
     BackTrader,
+    Relocator,
     Strategy,
     Indicator,
     Analyzer,

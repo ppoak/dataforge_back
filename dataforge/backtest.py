@@ -147,8 +147,8 @@ class Relocator:
         buy_price = self.buy_price.loc[weight.index].grouby(level=self.code_index).shift(1)
         sell_price = self.sell_price.loc[weight.index]
         ret = (sell_price - buy_price) / buy_price
-        return weight.groupby(level=date_index).apply(lambda x: 
-            (ret.loc[x.index] * x).sum() - commision.loc[x.index])
+        return weight.groupby(level=self.date_index).apply(lambda x: 
+            (ret.loc[x.index] * x).sum() - self.commision.loc[x.index])
 
     def netvalue(
         self,
@@ -162,11 +162,11 @@ class Relocator:
         lcnet = 1
         net = pd.Series(np.ones(datetime_index.size), index=datetime_index)
         for d in datetime_index[1:]:
-            cnet = (price.loc[d] * self.weight.loc[lrd]).sum() / lnet * lcnet
+            cnet = (self.price.loc[d] * self.weight.loc[lrd]).sum() / lnet * lcnet
             lrd = relocate_date[relocate_date <= d][-1]
             if d == lrd:
                 lcnet = cnet
-                lnet = (price.loc[d] * self.weight.loc[lrd]).sum()
+                lnet = (self.price.loc[d] * self.weight.loc[lrd]).sum()
             net.loc[d] = cnet
         return net
 
@@ -183,7 +183,7 @@ class BackTrader:
         self.data = self._valid(data)
         self.code_index = code_index
         self.date_index = date_index
-
+    
     def _valid(self, data: pd.DataFrame) -> pd.DataFrame:
         if isinstance(data, pd.DataFrame) and not 'close' in data.columns:
             raise ValueError('Your data should at least have a column named close')
@@ -295,4 +295,5 @@ class BackTrader:
                 timereturn.to_excel(writer, sheet_name='TimeReturn')
                 (timereturn + 1).cumprod().to_excel(writer, sheet_name='CummulativeReturn')
                 result.analyzers.ordertable.rets.to_excel(writer, sheet_name='OrderTable')
-    
+
+        return result
