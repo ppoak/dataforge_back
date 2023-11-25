@@ -162,7 +162,21 @@ class Table:
             df = self._read_fragment(frag)
             df = df.drop(column, axis=1)
             self._write_fragment(df, frag)
-        
+
+    def rename(
+        self,
+        column: dict
+    ):
+        """Rename (a) column(s)
+        ================
+        column: dict, `{<old column name(s)>: <new column name(s)>}`
+        """
+        column = parse_commastr(column)
+        for frag in self.fragments:
+            df = self._read_fragment(frag)
+            df = df.rename(columns=column)
+            self._write_fragment(df, frag)
+    
     def __str__(self) -> str:
         return f'Table at <{self.path.absolute()}>'
     
