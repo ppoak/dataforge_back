@@ -3,7 +3,6 @@ import pandas as pd
 import backtrader as bt
 import matplotlib.pyplot as plt
 from pathlib import Path
-from tools import parse_date
 
 
 class Strategy(bt.Strategy):
@@ -118,6 +117,7 @@ class Relocator:
         self.sell_price = self.price[sell_column] if isinstance(self.price, pd.DataFrame) else self.price
         self.code_index = code_index
         self.date_index = date_index
+        self.commision = commision
 
     def turnover(
         self, 
@@ -125,14 +125,14 @@ class Relocator:
         side: str = 'both'
     ):
         weight = weight.reindex(pd.MultiIndex.from_product([
-            self.weight.index.get_level_values(self.code_index).unique(), 
-            self.weight.index.get_level_values(self.date_index).unique()
+            weight.index.get_level_values(self.code_index).unique(), 
+            weight.index.get_level_values(self.date_index).unique()
         ], names = [self.code_index, self.date_index])).fillna(0)
 
         preweight = weight.groupby(level=self.code_index).shift(1).fillna(0)
         delta = weight - preweight
         if side == 'both':
-            return delta.groupby(level=self.date_index).apply(lambda x: x.abs().sum())
+            return delta.groupby(level=self.date_index).apply(lambda x: x.abs().sum() / 2)
         elif side == 'buy':
             return delta.groupby(level=self.date_index).apply(lambda x: x[x > 0].abs().sum())
         elif side == 'sell':
@@ -143,12 +143,12 @@ class Relocator:
         weight: pd.DataFrame | pd.Series, 
     ):
         weight = self._format(weight)
-        comission = self.turnover(weight) * self.commision
-        buy_price = self.buy_price.loc[weight.index].grouby(level=self.code_index).shift(1)
+        commision = (self.turnover(weight) * self.commision).shift(1)
+        buy_price = self.buy_price.loc[weight.index].groupby(level=self.code_index).shift(1)
         sell_price = self.sell_price.loc[weight.index]
         ret = (sell_price - buy_price) / buy_price
-        return weight.groupby(level=self.date_index).apply(lambda x: 
-            (ret.loc[x.index] * x).sum() - self.commision.loc[x.index])
+        return weight.groupby(level=self.date_index, group_keys=False).apply(lambda x: 
+            (ret.loc[x.index] * x).sum() - commision.loc[x.index.get_level_values(self.date_index)[0]])
 
     def netvalue(
         self,
@@ -215,6 +215,7 @@ class BackTrader:
         analyzers: 'bt.Analyzer | list' = None,
         observers: 'bt.Observer | list' = None,
         coc: bool = False,
+        commision: float = 0.005,
         verbose: bool = False,
         detail_img: str | Path = None,
         simple_img: str | Path = None,
@@ -227,6 +228,7 @@ class BackTrader:
         cerebro.broker.setcash(cash)
         if coc:
             cerebro.broker.set_coc(True)
+        cerebro.broker.setcommision(commision=commision)
 
         indicators = [indicators] if not isinstance(indicators, list) else indicators
         analyzers = [bt.analyzers.SharpeRatio, bt.analyzers.TimeDrawDown, bt.analyzers.TimeReturn, OrderTable]\
