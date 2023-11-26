@@ -143,13 +143,13 @@ class Relocator:
         weight: pd.DataFrame | pd.Series, 
     ):
         weight = self._format(weight)
-        commision = (self.turnover(weight) * self.commision).shift(1)
-        buy_price = self.buy_price.loc[weight.index].groupby(level=self.code_index).shift(1)
-        sell_price = self.sell_price.loc[weight.index]
+        commision = (self.turnover(weight) * self.commision)
+        buy_price = self.buy_price.loc[weight.index]
+        sell_price = self.sell_price.loc[weight.index].groupby(level=self.code_index).shift(-1)
         ret = (sell_price - buy_price) / buy_price
         return weight.groupby(level=self.date_index, group_keys=False).apply(lambda x: 
-            (ret.loc[x.index] * x).sum() - commision.loc[x.index.get_level_values(self.date_index)[0]])
-
+            (ret.loc[x.index] * x).sum() - commision.loc[x.index.get_level_values(self.date_index)[0]]).shift(1)
+    
     def netvalue(
         self,
         weight: pd.DataFrame | pd.Series,    
