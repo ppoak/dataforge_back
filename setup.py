@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setup(
-    name = "dataforge",
+    name = "dataforgelab",
     packages = find_packages(),
     author = "ppoak",
     author_email = "ppoak@foxmail.com",
@@ -14,11 +14,14 @@ setup(
     long_description_content_type = "text/markdown",
     keywords = ['quant', 'framework', 'finance'],
     url = "https://github.com/ppoak/dataforge",
-    version = '0.0.2',
+    version = '0.1.0',
     install_requires = [
-        'pandas',
+        'bs4',
         'numpy',
+        'joblib',
+        'pandas',
         'akshare',
         'backtrader',
+        'matplotlib',
     ],
 )
