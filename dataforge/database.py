@@ -178,9 +178,11 @@ class Table:
             self._write_fragment(df, frag)
     
     def __str__(self) -> str:
-        return (f'Table at <{self.path.absolute()}>\n'
-                f'\tfragments: <{self.fragments[0]}> - <{self.fragments[-1]}>\n'
-                f'\tcolumns: <{self.columns.to_list()}>')
+        return (f'Table at <{self.path.absolute()}>\n' + 
+                (f'\tfragments: <{self.fragments[0]}> - <{self.fragments[-1]}>\n' 
+                 if self.fragments else '\tfragments: EMPTY\n') + 
+                (f'\tcolumns: <{self.columns.to_list()}>' 
+                 if self.fragments else '\tcolumns: EMPTY\n'))
     
     def __repr__(self) -> str:
         return self.__str__()

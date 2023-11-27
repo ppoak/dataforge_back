@@ -18,6 +18,7 @@ setup(
     install_requires = [
         'pandas',
         'numpy',
-        'akshare'
+        'akshare',
+        'backtrader',
     ],
 )
