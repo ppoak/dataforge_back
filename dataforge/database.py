@@ -132,10 +132,10 @@ class Table:
         """
         if self.spliter:
             df.groupby(self.spliter).apply(
-                lambda x: pd.concat([
-                    self._read_fragment(self.namer(x)), x
-            ], axis=1).to_parquet(
-                (self.path / self.namer(x)).with_suffix('.parquet')
+                lambda x: pd.concat([self._read_fragment(self.namer(x)), x], axis=1).to_parquet(
+                    (self.path / self.namer(x)).with_suffix('.parquet')
+                ) if self.namer(x) in self.fragments else x.reindex(self.columns, axis=1).to_parquet(
+                    (self.path / self.namer(x)).with_suffix('.parquet')
             ))
             related_fragment = df.groupby(self.spliter).apply(lambda x: self.namer(x))
             columns = df.columns if isinstance(df, pd.DataFrame) else [df.name]
