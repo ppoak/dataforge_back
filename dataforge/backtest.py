@@ -90,7 +90,7 @@ class OrderTable(Analyzer):
         
     def get_analysis(self):
         self.rets = pd.DataFrame(self.orders, columns=['datetime', 'code', 'size', 'price', 'direction'])
-        self.rets["code"] = pd.to_datetime(self.rets["code"])
+        self.rets["datetime"] = pd.to_datetime(self.rets["datetime"])
         self.rets = self.rets.set_index(['datetime', 'code'])
         return self.rets
 
@@ -111,6 +111,7 @@ class CashValueRecorder(Analyzer):
             {'cash': self.cash, 'value': self.value}, 
             index=pd.to_datetime(self.date)
         )
+        self.rets.index.name = "datetime"
         return self.rets 
 
 
@@ -240,28 +241,30 @@ class BackTrader:
         analyzers: 'bt.Analyzer | list' = None,
         observers: 'bt.Observer | list' = None,
         coc: bool = False,
-        commision: float = 0.005,
+        commission: float = 0.005,
         verbose: bool = True,
         detail_img: str | Path = None,
         simple_img: str | Path = None,
         data_path: str | Path = None,
         **kwargs
     ):
-        start = parse_date(start) or self.data.index.get_level_values(self.date_index).min()
-        stop = parse_date(stop) or self.data.index.get_level_values(self.date_index).max()
+        start = parse_date(start) if start is not None else\
+            self.data.index.get_level_values(self.date_index).min()
+        stop = parse_date(stop) if stop is not None else\
+            self.data.index.get_level_values(self.date_index).max()
         cerebro = bt.Cerebro()
         cerebro.broker.setcash(cash)
         if coc:
             cerebro.broker.set_coc(True)
-        cerebro.broker.setcommision(commision=commision)
+        cerebro.broker.setcommission(commission=commission)
 
         indicators = [indicators] if not isinstance(indicators, list) else indicators
-        analyzers = [bt.analyzers.SharpeRatio, bt.analyzers.TimeDrawDown, 
-                     bt.analyzers.TimeReturn, OrderTable, CashValueRecorder]\
-            if analyzers is None else [analyzers] if not isinstance(analyzers, list) else analyzers
-        observers = [bt.observers.DrawDown] if observers is None else [observers]\
-            if not isinstance(observers, list) else observers
-
+        analyzers = analyzers if isinstance(analyzers, list) else [analyzers]
+        analyzers += [bt.analyzers.SharpeRatio, bt.analyzers.TimeDrawDown, bt.analyzers.AnnualReturn,
+                     bt.analyzers.TimeReturn, OrderTable, CashValueRecorder]
+        observers = observers if isinstance(observers, list) else [observers]
+        observers += [bt.observers.DrawDown]
+        
         more = set(self.data.columns.to_list()) - set(['open', 'high', 'low', 'close', 'volume'])
 
         class _PandasData(bt.feeds.PandasData):
@@ -279,29 +282,32 @@ class BackTrader:
             feed = _PandasData(dataname=d, fromdate=start, todate=stop)
             cerebro.adddata(feed, name=dn)
         
-        if indicators is not None:
-            for indicator in indicators:
+        for indicator in indicators:
+            if indicator is not None:
                 cerebro.addindicator(indicator)
         if strategy is not None:
             cerebro.addstrategy(strategy, **kwargs)
         for analyzer in analyzers:
-            cerebro.addanalyzer(analyzer)
+            if analyzer is not None:
+                cerebro.addanalyzer(analyzer)
         for observer in observers:
-            cerebro.addobserver(observer)
+            if observer is not None:
+                cerebro.addobserver(observer)
         
         strat = cerebro.run()[0]
         timereturn = pd.Series(strat.analyzers.timereturn.rets)
+        timereturn.index.name = "datetime"
         netvalue = (timereturn + 1).cumprod()
 
         if verbose:
-            print('-' * 15 + " Sharpe " + '-' * 15)
-            print(dict(strat.analyzers.sharperatio.rets))
+            print('-' * 15 + " Return " + '-' * 15)
+            print(f"total return: {(netvalue.iloc[-1] - 1) * 100:.2f} (%)")
+            print(f"annual return <{start.strftime('%Y')}> - <{stop.strftime('%Y')}>: "
+                  f"{strat.analyzers.annualreturn.rets} (%)")
             print('-' * 15 + " Time Drawdown " + '-' * 15)
             print(dict(strat.analyzers.timedrawdown.rets))
-            print('-' * 15 + " Return " + '-' * 15)
-            print(f"total return: {netvalue.iloc[-1] * 100:.2f}%")
-            annual_ret = np.power(netvalue.iloc[-1], (stop - start).days / 252) - 1
-            print(f"annual return: {annual_ret * 100:.2f}%")
+            print('-' * 15 + " Sharpe " + '-' * 15)
+            print(dict(strat.analyzers.sharperatio.rets))
         
         if detail_img is not None:
             if len(datanames) > 3:
@@ -314,15 +320,16 @@ class BackTrader:
 
         if simple_img is not None:
             pd.concat(
-                [timereturn, netvalue], keys=['timereturn', 'netvalue']
+                [timereturn, netvalue], axis=1, keys=['timereturn', 'netvalue']
             ).plot(secondary_y='timereturn')
             plt.savefig(simple_img)
         
         if data_path is not None:
             with pd.ExcelWriter(data_path) as writer:
-                pd.cocnat(
-                    [timereturn, netvalue], keys=['timereturn', 'netvalue']
+                pd.concat(
+                    [timereturn, netvalue], axis=1, keys=['timereturn', 'netvalue']
                 ).to_excel(writer, sheet_name='Profit&Netvalue')
                 strat.analyzers.ordertable.rets.to_excel(writer, sheet_name='OrderTable')
+                strat.analyzers.cashvaluerecorder.rets.to_excel(writer, sheet_name='CashValueRecord')
 
         return strat
