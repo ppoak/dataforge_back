@@ -3,6 +3,7 @@ import pandas as pd
 import backtrader as bt
 import matplotlib.pyplot as plt
 from pathlib import Path
+from .tools import parse_date
 
 
 class Strategy(bt.Strategy):
@@ -77,20 +78,40 @@ class OrderTable(Analyzer):
             if order.isbuy():
                 self.orders.append([
                     self.data.datetime.date(0),
-                    order.info.get('name', 'data'), order.executed.size, 
+                    order.data._name, order.executed.size, 
                     order.executed.price, 'BUY']
                 )
             elif order.issell():
                 self.orders.append([
                     self.data.datetime.date(0),
-                    order.info.get('name', 'data'), order.executed.size, 
+                    order.data._name, order.executed.size, 
                     order.executed.price, 'SELL']
                 )
         
     def get_analysis(self):
-        self.rets = pd.DataFrame(self.orders, columns=['datetime', 'asset', 'size', 'price', 'direction'])
-        self.rets = self.rets.set_index('datetime')
-        return self.orders
+        self.rets = pd.DataFrame(self.orders, columns=['datetime', 'code', 'size', 'price', 'direction'])
+        self.rets["code"] = pd.to_datetime(self.rets["code"])
+        self.rets = self.rets.set_index(['datetime', 'code'])
+        return self.rets
+
+
+class CashValueRecorder(Analyzer):
+    def __init__(self):
+        self.cash = []
+        self.value = []
+        self.date = []
+
+    def next(self):
+        self.cash.append(self.strategy.broker.get_cash())
+        self.value.append(self.strategy.broker.get_value())
+        self.date.append(self.strategy.data.datetime.date(0))
+
+    def get_analysis(self):
+        self.rets = pd.DataFrame(
+            {'cash': self.cash, 'value': self.value}, 
+            index=pd.to_datetime(self.date)
+        )
+        return self.rets 
 
 
 class Relocator:
@@ -181,6 +202,10 @@ class BackTrader:
     ):
         self.data = data
         self.data = self._valid(data)
+        self.data = self.data.reindex(pd.MultiIndex.from_product([
+            self.data.index.get_level_values(code_index).unique(),
+            self.data.index.get_level_values(date_index).unique(),
+        ], names=[code_index, date_index])).fillna(0)
         self.code_index = code_index
         self.date_index = date_index
     
@@ -216,14 +241,14 @@ class BackTrader:
         observers: 'bt.Observer | list' = None,
         coc: bool = False,
         commision: float = 0.005,
-        verbose: bool = False,
+        verbose: bool = True,
         detail_img: str | Path = None,
         simple_img: str | Path = None,
         data_path: str | Path = None,
         **kwargs
     ):
-        start = start or self.data.index.get_level_values(self.date_index).min()
-        stop = stop or self.data.index.get_level_values(self.date_index).max()
+        start = parse_date(start) or self.data.index.get_level_values(self.date_index).min()
+        stop = parse_date(stop) or self.data.index.get_level_values(self.date_index).max()
         cerebro = bt.Cerebro()
         cerebro.broker.setcash(cash)
         if coc:
@@ -231,7 +256,8 @@ class BackTrader:
         cerebro.broker.setcommision(commision=commision)
 
         indicators = [indicators] if not isinstance(indicators, list) else indicators
-        analyzers = [bt.analyzers.SharpeRatio, bt.analyzers.TimeDrawDown, bt.analyzers.TimeReturn, OrderTable]\
+        analyzers = [bt.analyzers.SharpeRatio, bt.analyzers.TimeDrawDown, 
+                     bt.analyzers.TimeReturn, OrderTable, CashValueRecorder]\
             if analyzers is None else [analyzers] if not isinstance(analyzers, list) else analyzers
         observers = [bt.observers.DrawDown] if observers is None else [observers]\
             if not isinstance(observers, list) else observers
@@ -263,21 +289,19 @@ class BackTrader:
         for observer in observers:
             cerebro.addobserver(observer)
         
-        result = cerebro.run()[0]
-
-        timereturn = pd.Series(result.analyzers.timereturn.rets)
+        strat = cerebro.run()[0]
+        timereturn = pd.Series(strat.analyzers.timereturn.rets)
+        netvalue = (timereturn + 1).cumprod()
 
         if verbose:
-            print('-' * 15 + "Sharpe" + '-' * 15)
-            print(dict(result.analyzers.sharperatio.rets))
-            print('-' * 15 + "Time Drawdown" + '-' * 15)
-            print(dict(result.analyzers.timedrawdown.rets))
-            print('-' * 15 + "Time Return" + '-' * 15)
-            print(timereturn)
-            print('-' * 15 + "Cummulative Return" + '-' * 15)
-            print((timereturn + 1).cumprod())
-            print('-' * 15 + "Order Table" + '-' * 15)
-            print(result.analyzers.ordertable.rets)
+            print('-' * 15 + " Sharpe " + '-' * 15)
+            print(dict(strat.analyzers.sharperatio.rets))
+            print('-' * 15 + " Time Drawdown " + '-' * 15)
+            print(dict(strat.analyzers.timedrawdown.rets))
+            print('-' * 15 + " Return " + '-' * 15)
+            print(f"total return: {netvalue.iloc[-1] * 100:.2f}%")
+            annual_ret = np.power(netvalue.iloc[-1], (stop - start).days / 252) - 1
+            print(f"annual return: {annual_ret * 100:.2f}%")
         
         if detail_img is not None:
             if len(datanames) > 3:
@@ -289,13 +313,16 @@ class BackTrader:
             fig.savefig(detail_img, dpi=300)
 
         if simple_img is not None:
-            (timereturn + 1).cumprod().plot()
+            pd.concat(
+                [timereturn, netvalue], keys=['timereturn', 'netvalue']
+            ).plot(secondary_y='timereturn')
             plt.savefig(simple_img)
-            
+        
         if data_path is not None:
             with pd.ExcelWriter(data_path) as writer:
-                timereturn.to_excel(writer, sheet_name='TimeReturn')
-                (timereturn + 1).cumprod().to_excel(writer, sheet_name='CummulativeReturn')
-                result.analyzers.ordertable.rets.to_excel(writer, sheet_name='OrderTable')
+                pd.cocnat(
+                    [timereturn, netvalue], keys=['timereturn', 'netvalue']
+                ).to_excel(writer, sheet_name='Profit&Netvalue')
+                strat.analyzers.ordertable.rets.to_excel(writer, sheet_name='OrderTable')
 
-        return result
+        return strat

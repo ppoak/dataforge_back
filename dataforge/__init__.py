@@ -36,4 +36,5 @@ from .backtest import (
     Analyzer,
     Observer,
     OrderTable,
+    CashValueRecorder,
 )
